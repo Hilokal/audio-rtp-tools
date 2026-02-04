@@ -1,0 +1,241 @@
+#include <node_api.h>
+
+#include "audio_encode_thread.h"
+#include "producer_thread.h"
+#include "thread_messages.h"
+#include "node_errors.h"
+#include "util.h"
+#include "thread_with_promise_result.h"
+
+extern "C" {
+#include <libavutil/time.h>
+#include <libavutil/mem.h>
+#include <opus/opus.h>
+}
+
+// OpenAI Realtime API sends 24kHz mono PCM
+#define INPUT_SAMPLE_RATE 24000
+// Opus RTP timestamps are always at 48kHz
+#define OUTPUT_SAMPLE_RATE 48000
+#define CHANNELS 2
+// 20ms frame at 24kHz input = 480 samples
+#define FRAME_SIZE_INPUT 480
+// 20ms frame at 48kHz for PTS = 960 samples
+#define FRAME_SIZE_OUTPUT 960
+// Maximum opus encoded frame size
+#define MAX_OPUS_FRAME_SIZE 1275
+
+// Producer queue size - needs to buffer during pacing
+#define PRODUCER_QUEUE_SIZE 4096
+
+// Copied from libavcodec/libopus.c
+static int ff_opus_error_to_averror(int err) {
+  switch (err) {
+    case OPUS_BAD_ARG:
+      return AVERROR(EINVAL);
+    case OPUS_BUFFER_TOO_SMALL:
+      return AVERROR_UNKNOWN;
+    case OPUS_INTERNAL_ERROR:
+      return AVERROR(EFAULT);
+    case OPUS_INVALID_PACKET:
+      return AVERROR_INVALIDDATA;
+    case OPUS_UNIMPLEMENTED:
+      return AVERROR(ENOSYS);
+    case OPUS_INVALID_STATE:
+      return AVERROR_UNKNOWN;
+    case OPUS_ALLOC_FAIL:
+      return AVERROR(ENOMEM);
+    default:
+      return AVERROR(EINVAL);
+  }
+}
+
+static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const AudioEncodeThreadParams &params) {
+  set_thread_name("audio_encode_thread");
+
+  int ret = 0;
+  ThreadMessage thread_message;
+  ProducerThreadData *producer_thread = NULL;
+
+  // Opus encoder state
+  OpusEncoder *opus_encoder = NULL;
+  int16_t mono_accum[FRAME_SIZE_INPUT];
+  int16_t stereo_frame[FRAME_SIZE_INPUT * CHANNELS];
+  uint8_t opus_data[MAX_OPUS_FRAME_SIZE];
+  int accum_pos = 0;
+  int64_t pts = 0;
+
+  int64_t total_samples_encoded = 0;
+  int64_t total_frames_encoded = 0;
+
+  //
+  // Start producer thread with RTP parameters
+  //
+  {
+    ProducerThreadParams producer_params;
+    producer_params.url = params.rtpUrl;
+    producer_params.ssrc = params.ssrc;
+    producer_params.payloadType = params.payloadType;
+    producer_params.cname = params.cname;
+    producer_params.cryptoSuite = params.cryptoSuite;
+    producer_params.keyBase64 = params.keyBase64;
+
+    ret = start_producer_thread_raw(producer_params, &producer_thread);
+    if (ret != 0) {
+      fprintf(stderr, "audio_encode_thread: failed to start producer thread [%d]\n", ret);
+      goto cleanup;
+    }
+  }
+
+  //
+  // 3. Create Opus encoder - accepts 24kHz input
+  //
+  {
+    int opus_err;
+    opus_encoder = opus_encoder_create(INPUT_SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_VOIP, &opus_err);
+    if (opus_err != OPUS_OK) {
+      fprintf(stderr, "audio_encode_thread: failed to create opus encoder: %s\n", opus_strerror(opus_err));
+      ret = ff_opus_error_to_averror(opus_err);
+      goto cleanup;
+    }
+
+    // Set bitrate
+    opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(params.bitrate > 0 ? params.bitrate : 32000));
+  }
+
+  fprintf(stderr, "audio_encode_thread: started, bitrate=%d\n", params.bitrate);
+
+  //
+  // 4. Main loop - receive PCM, encode, post to producer
+  //
+  while (true) {
+    ret = av_thread_message_queue_recv(message_queue, &thread_message, 0);
+    if (ret < 0) {
+      if (ret == AVERROR_EOF) {
+        ret = 0;
+      }
+      goto cleanup;
+    }
+
+    if (thread_message.type == POST_PCM_BUFFER) {
+      int16_t *input = (int16_t *)thread_message.param.buf->data;
+      int remaining = thread_message.param.buf->size / sizeof(int16_t);
+
+      while (remaining > 0) {
+        // Copy mono samples to accumulator
+        int to_copy = remaining;
+        if (to_copy > FRAME_SIZE_INPUT - accum_pos) {
+          to_copy = FRAME_SIZE_INPUT - accum_pos;
+        }
+
+        memcpy(mono_accum + accum_pos, input, to_copy * sizeof(int16_t));
+        accum_pos += to_copy;
+        input += to_copy;
+        remaining -= to_copy;
+
+        // When we have a full frame, encode it
+        if (accum_pos >= FRAME_SIZE_INPUT) {
+          // Convert mono to stereo (duplicate each sample)
+          for (int i = 0; i < FRAME_SIZE_INPUT; i++) {
+            stereo_frame[i * 2] = mono_accum[i];      // Left
+            stereo_frame[i * 2 + 1] = mono_accum[i];  // Right
+          }
+
+          // Encode stereo frame (480 samples at 24kHz)
+          int encoded_len = opus_encode(opus_encoder, stereo_frame, FRAME_SIZE_INPUT, opus_data, MAX_OPUS_FRAME_SIZE);
+
+          if (encoded_len < 0) {
+            fprintf(stderr, "audio_encode_thread: opus_encode error: %s\n", opus_strerror(encoded_len));
+            accum_pos = 0;
+            continue;
+          }
+
+          // Create AVPacket - PTS is at 48kHz!
+          AVPacket *pkt = av_packet_alloc();
+          if (pkt == NULL) {
+            fprintf(stderr, "audio_encode_thread: av_packet_alloc failed\n");
+            accum_pos = 0;
+            continue;
+          }
+
+          ret = av_new_packet(pkt, encoded_len);
+          if (ret != 0) {
+            av_packet_free(&pkt);
+            fprintf(stderr, "audio_encode_thread: av_packet_new failed\n");
+            accum_pos = 0;
+            continue;
+          }
+
+          memcpy(pkt->data, opus_data, encoded_len);
+          pkt->size = encoded_len;
+          pkt->pts = pts;
+          pkt->dts = pts;
+          pkt->duration = FRAME_SIZE_OUTPUT;  // 960 at 48kHz = 20ms
+
+          // Post to producer thread
+          int post_ret = post_packet_to_thread(producer_thread->message_queue, pkt, AV_THREAD_MESSAGE_NONBLOCK);
+          if (post_ret != 0) {
+            if (post_ret == AVERROR(EAGAIN)) {
+              fprintf(stderr, "audio_encode_thread: WARNING producer queue full, dropping packet\n");
+            }
+          }
+
+          av_packet_free(&pkt);
+
+          pts += FRAME_SIZE_OUTPUT;  // Increment at 48kHz rate
+          accum_pos = 0;
+          total_frames_encoded++;
+          total_samples_encoded += FRAME_SIZE_INPUT;
+        }
+      }
+
+      // Free the PCM buffer
+      thread_message_free_func(&thread_message);
+    } else {
+      thread_message_free_func(&thread_message);
+    }
+  }
+
+cleanup:
+  fprintf(stderr, "audio_encode_thread: stopping, encoded %lld frames (%lld samples, %.2f sec)\n",
+          (long long)total_frames_encoded,
+          (long long)total_samples_encoded,
+          (double)total_samples_encoded / INPUT_SAMPLE_RATE);
+
+  if (producer_thread != NULL) {
+    int producer_ret = stop_producer_thread_raw(producer_thread);
+    if (producer_ret != 0) {
+      fprintf(stderr, "audio_encode_thread: producer thread returned error [%d]\n", producer_ret);
+    }
+  }
+
+  // Cleanup resources
+  if (opus_encoder != NULL) {
+    opus_encoder_destroy(opus_encoder);
+  }
+
+  return ret;
+}
+
+napi_status start_audio_encode_thread(
+  napi_env env,
+  const AudioEncodeThreadParams &params,
+  napi_value abort_signal,
+  napi_value *external,
+  napi_value *promise
+) {
+  size_t stack_size = get_stack_size_for_thread("ENCODER");
+
+  return start_thread_with_promise_result<AudioEncodeThreadParams>(
+    env,
+    ThreadMain,
+    params,
+    abort_signal,
+    NULL,
+    stack_size,
+    DEFAULT_MESSAGE_QUEUE_SIZE,
+    external,
+    NULL,
+    promise
+  );
+}
