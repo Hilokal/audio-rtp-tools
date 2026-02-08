@@ -17,6 +17,11 @@ enum ThreadMessageType {
 
   // Used for streaming PCM buffers for encoding
   POST_PCM_BUFFER,
+
+  // Runtime encoder config changes
+  SET_ENCODER_BITRATE,
+  SET_ENCODER_FEC,
+  SET_ENCODER_PACKET_LOSS_PERC,
 };
 
 union ThreadMessageParameter {
@@ -25,6 +30,7 @@ union ThreadMessageParameter {
   int64_t start_time_localtime;
   AVCodecParameters *codecpar;
   AVBufferRef *buf;
+  int32_t int_value;
 };
 
 struct ThreadMessage {
@@ -41,6 +47,9 @@ int post_tick_to_thread(AVThreadMessageQueue *message_queue);
 int post_ogg_buffer_to_thread(AVThreadMessageQueue *message_queue, void *buffer, size_t buffer_length);
 int post_ogg_reset_demuxer_to_thread(AVThreadMessageQueue *message_queue);
 int post_pcm_buffer_to_thread(AVThreadMessageQueue *message_queue, void *buffer, size_t buffer_length);
+int post_set_bitrate_to_thread(AVThreadMessageQueue *mq, int32_t bitrate);
+int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable);
+int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent);
 
 
 // This should be sent to av_thread_message_queue_set_free_func after initialization

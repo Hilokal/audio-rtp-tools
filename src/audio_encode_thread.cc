@@ -101,6 +101,12 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
     // Set bitrate
     opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(params.bitrate > 0 ? params.bitrate : 32000));
+
+    // Set FEC
+    opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(params.enableFec ? 1 : 0));
+
+    // Set expected packet loss percentage
+    opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(params.packetLossPercent));
   }
 
   fprintf(stderr, "audio_encode_thread: started, bitrate=%d\n", params.bitrate);
@@ -191,6 +197,13 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
       // Free the PCM buffer
       thread_message_free_func(&thread_message);
+    } else if (thread_message.type == SET_ENCODER_BITRATE) {
+      opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(
+        thread_message.param.int_value > 0 ? thread_message.param.int_value : OPUS_AUTO));
+    } else if (thread_message.type == SET_ENCODER_FEC) {
+      opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(thread_message.param.int_value));
+    } else if (thread_message.type == SET_ENCODER_PACKET_LOSS_PERC) {
+      opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(thread_message.param.int_value));
     } else {
       thread_message_free_func(&thread_message);
     }

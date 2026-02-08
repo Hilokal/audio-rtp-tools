@@ -432,6 +432,66 @@ namespace hilokal {
     return return_value;
   }
 
+  napi_value postSetBitrate(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 2;
+    napi_value args[2];
+    napi_status status = napi_ok;
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    AVThreadMessageQueue *message_queue;
+    status = napi_get_value_external(env, args[0], (void **)&message_queue);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    int32_t bitrate;
+    status = napi_get_value_int32(env, args[1], &bitrate);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    post_set_bitrate_to_thread(message_queue, bitrate);
+    return NULL;
+  }
+
+  napi_value postSetEnableFec(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 2;
+    napi_value args[2];
+    napi_status status = napi_ok;
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    AVThreadMessageQueue *message_queue;
+    status = napi_get_value_external(env, args[0], (void **)&message_queue);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    bool enable;
+    status = napi_get_value_bool(env, args[1], &enable);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    post_set_fec_to_thread(message_queue, enable);
+    return NULL;
+  }
+
+  napi_value postSetPacketLossPercent(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 2;
+    napi_value args[2];
+    napi_status status = napi_ok;
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    AVThreadMessageQueue *message_queue;
+    status = napi_get_value_external(env, args[0], (void **)&message_queue);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    int32_t percent;
+    status = napi_get_value_int32(env, args[1], &percent);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    post_set_packet_loss_perc_to_thread(message_queue, percent);
+    return NULL;
+  }
+
   napi_value startAudioEncodeThread(napi_env env, napi_callback_info cbinfo) {
     size_t argsLength = 2;
     napi_value args[2];
@@ -462,6 +522,12 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = get_option_int32(env, args[1], "bitrate", &params.bitrate);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = get_option_bool(env, args[1], "enableFec", &params.enableFec);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = get_option_int32(env, args[1], "packetLossPercent", &params.packetLossPercent);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     napi_value abort_signal = args[0];
@@ -605,6 +671,15 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "postPcmToEncoder", postPcmToEncoder);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "postSetBitrate", postSetBitrate);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "postSetEnableFec", postSetEnableFec);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "postSetPacketLossPercent", postSetPacketLossPercent);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     av_log_set_callback(av_log_override_callback);

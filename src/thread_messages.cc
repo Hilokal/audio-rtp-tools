@@ -97,6 +97,42 @@ int post_pcm_buffer_to_thread(AVThreadMessageQueue *message_queue, void *buffer,
   return ret;
 }
 
+int post_set_bitrate_to_thread(AVThreadMessageQueue *mq, int32_t bitrate) {
+  ThreadMessage thread_message = {
+    .type = SET_ENCODER_BITRATE,
+    .param = {
+      .int_value = bitrate
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
+int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable) {
+  ThreadMessage thread_message = {
+    .type = SET_ENCODER_FEC,
+    .param = {
+      .int_value = enable ? 1 : 0
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
+int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent) {
+  ThreadMessage thread_message = {
+    .type = SET_ENCODER_PACKET_LOSS_PERC,
+    .param = {
+      .int_value = percent
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
 void thread_message_free_func(void *opaque) {
   ThreadMessage *thread_message = (ThreadMessage *)opaque;
   if (thread_message->type == POST_CODEC_PARAMETERS) {
