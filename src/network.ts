@@ -1,6 +1,12 @@
 import dgram from "dgram";
 import { networkInterfaces } from "os";
-import { range, shuffle } from "lodash";
+function shuffle<T>(array: T[]): T[] {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
 
 // Environment helpers
 
@@ -114,7 +120,7 @@ if (maxPort > maxValidPort) {
   throw new Error(`MAX_RTP_PORT cannot be greater than ${maxValidPort}. It is set to ${maxPort}`);
 }
 
-const availablePortOffsets = shuffle(range((maxPort - minPort) / 2));
+const availablePortOffsets = shuffle(Array.from({ length: (maxPort - minPort) / 2 }, (_, i) => i));
 
 export async function choosePorts(): Promise<[number, number]> {
   const maxAttempts = 20;
