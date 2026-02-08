@@ -13,17 +13,15 @@ extern "C" {
 #include <opus/opus.h>
 }
 
-// OpenAI Realtime API sends 24kHz mono PCM
-#define INPUT_SAMPLE_RATE 24000
 // Opus RTP timestamps are always at 48kHz
 #define OUTPUT_SAMPLE_RATE 48000
 #define CHANNELS 2
-// 20ms frame at 24kHz input = 480 samples
-#define FRAME_SIZE_INPUT 480
 // 20ms frame at 48kHz for PTS = 960 samples
 #define FRAME_SIZE_OUTPUT 960
 // Maximum opus encoded frame size
 #define MAX_OPUS_FRAME_SIZE 1275
+// Max 20ms frame at 48kHz input
+#define MAX_FRAME_SIZE_INPUT 960
 
 // Producer queue size - needs to buffer during pacing
 #define PRODUCER_QUEUE_SIZE 4096
@@ -53,14 +51,17 @@ static int ff_opus_error_to_averror(int err) {
 static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const AudioEncodeThreadParams &params) {
   set_thread_name("audio_encode_thread");
 
+  const int input_sample_rate = params.sampleRate;
+  const int frame_size_input = input_sample_rate * 20 / 1000;  // 20ms frame
+
   int ret = 0;
   ThreadMessage thread_message;
   ProducerThreadData *producer_thread = NULL;
 
   // Opus encoder state
   OpusEncoder *opus_encoder = NULL;
-  int16_t mono_accum[FRAME_SIZE_INPUT];
-  int16_t stereo_frame[FRAME_SIZE_INPUT * CHANNELS];
+  int16_t mono_accum[MAX_FRAME_SIZE_INPUT];
+  int16_t stereo_frame[MAX_FRAME_SIZE_INPUT * CHANNELS];
   uint8_t opus_data[MAX_OPUS_FRAME_SIZE];
   int accum_pos = 0;
   int64_t pts = 0;
@@ -88,11 +89,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   }
 
   //
-  // 3. Create Opus encoder - accepts 24kHz input
+  // 3. Create Opus encoder at specified sample rate
   //
   {
     int opus_err;
-    opus_encoder = opus_encoder_create(INPUT_SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_VOIP, &opus_err);
+    opus_encoder = opus_encoder_create(input_sample_rate, CHANNELS, OPUS_APPLICATION_VOIP, &opus_err);
     if (opus_err != OPUS_OK) {
       fprintf(stderr, "audio_encode_thread: failed to create opus encoder: %s\n", opus_strerror(opus_err));
       ret = ff_opus_error_to_averror(opus_err);
@@ -130,8 +131,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       while (remaining > 0) {
         // Copy mono samples to accumulator
         int to_copy = remaining;
-        if (to_copy > FRAME_SIZE_INPUT - accum_pos) {
-          to_copy = FRAME_SIZE_INPUT - accum_pos;
+        if (to_copy > frame_size_input - accum_pos) {
+          to_copy = frame_size_input - accum_pos;
         }
 
         memcpy(mono_accum + accum_pos, input, to_copy * sizeof(int16_t));
@@ -140,15 +141,15 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         remaining -= to_copy;
 
         // When we have a full frame, encode it
-        if (accum_pos >= FRAME_SIZE_INPUT) {
+        if (accum_pos >= frame_size_input) {
           // Convert mono to stereo (duplicate each sample)
-          for (int i = 0; i < FRAME_SIZE_INPUT; i++) {
+          for (int i = 0; i < frame_size_input; i++) {
             stereo_frame[i * 2] = mono_accum[i];      // Left
             stereo_frame[i * 2 + 1] = mono_accum[i];  // Right
           }
 
           // Encode stereo frame (480 samples at 24kHz)
-          int encoded_len = opus_encode(opus_encoder, stereo_frame, FRAME_SIZE_INPUT, opus_data, MAX_OPUS_FRAME_SIZE);
+          int encoded_len = opus_encode(opus_encoder, stereo_frame, frame_size_input, opus_data, MAX_OPUS_FRAME_SIZE);
 
           if (encoded_len < 0) {
             fprintf(stderr, "audio_encode_thread: opus_encode error: %s\n", opus_strerror(encoded_len));
@@ -191,7 +192,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           pts += FRAME_SIZE_OUTPUT;  // Increment at 48kHz rate
           accum_pos = 0;
           total_frames_encoded++;
-          total_samples_encoded += FRAME_SIZE_INPUT;
+          total_samples_encoded += frame_size_input;
         }
       }
 
@@ -213,7 +214,7 @@ cleanup:
   fprintf(stderr, "audio_encode_thread: stopping, encoded %lld frames (%lld samples, %.2f sec)\n",
           (long long)total_frames_encoded,
           (long long)total_samples_encoded,
-          (double)total_samples_encoded / INPUT_SAMPLE_RATE);
+          (double)total_samples_encoded / input_sample_rate);
 
   if (producer_thread != NULL) {
     int producer_ret = stop_producer_thread_raw(producer_thread);

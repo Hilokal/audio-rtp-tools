@@ -530,6 +530,9 @@ namespace hilokal {
     status = get_option_int32(env, args[1], "packetLossPercent", &params.packetLossPercent);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
+    status = get_option_int32(env, args[1], "sampleRate", &params.sampleRate);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
     napi_value abort_signal = args[0];
     napi_value external;
     napi_value promise;

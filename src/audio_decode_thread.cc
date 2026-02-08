@@ -14,11 +14,9 @@ extern "C" {
   #include <opus/opus.h>
 }
 
-// Opus decoder constants for 24kHz mono output
-#define OPUS_SAMPLE_RATE 24000
-#define OPUS_CHANNELS 1
+// Opus RTP timestamps are always at 48kHz
+#define OUTPUT_SAMPLE_RATE 48000
 #define OPUS_FRAME_DURATION_MS 20
-#define OPUS_SAMPLES_PER_FRAME (OPUS_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 480 samples
 #define OPUS_MAX_FRAME_SIZE (960 * 6)  // Max frame size for opus
 
 // Copied from libavcodec/libopus.c
@@ -54,6 +52,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
   set_thread_name("audio_decode_thread");
 
+  const int opus_sample_rate = thread_data.sampleRate;
+  const int opus_channels = thread_data.channels;
+  const int opus_samples_per_frame = opus_sample_rate * OPUS_FRAME_DURATION_MS / 1000;
+  const int pts_scale = OUTPUT_SAMPLE_RATE / opus_sample_rate;
+
   ThreadMessage thread_message;
 
   int64_t start_time_realtime = AV_NOPTS_VALUE;
@@ -72,7 +75,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   int64_t total_samples_decoded = 0;
   int64_t total_packets_decoded = 0;
   int64_t total_missing_frames = 0;
-  int last_frame_size = OPUS_SAMPLES_PER_FRAME;
+  int last_frame_size = opus_samples_per_frame;
 
   AVPacket *pkt_clone = av_packet_alloc();
   if (pkt_clone == NULL) {
@@ -81,7 +84,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   }
 
   // Allocate decoder output buffer
-  decoder_output = (int16_t *)av_malloc(OPUS_MAX_FRAME_SIZE * OPUS_CHANNELS * sizeof(int16_t));
+  decoder_output = (int16_t *)av_malloc(OPUS_MAX_FRAME_SIZE * opus_channels * sizeof(int16_t));
   if (decoder_output == NULL) {
     thread_ret = AVERROR(ENOMEM);
     goto cleanup_thread;
@@ -111,7 +114,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       // Create opus decoder when we receive codec parameters
       if (opus_decoder == NULL) {
         int opus_err;
-        opus_decoder = opus_decoder_create(OPUS_SAMPLE_RATE, OPUS_CHANNELS, &opus_err);
+        opus_decoder = opus_decoder_create(opus_sample_rate, opus_channels, &opus_err);
         if (opus_err != OPUS_OK) {
           fprintf(stderr, "Failed to create opus decoder: %s\n", opus_strerror(opus_err));
           thread_ret = ff_opus_error_to_averror(opus_err);
@@ -132,9 +135,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       // Detect gaps in PTS timestamps
       if (expected_pts != AV_NOPTS_VALUE && pkt_pts > expected_pts) {
         // Calculate how many frames were missed
-        // PTS is at 48kHz, last_frame_size is at 24kHz, so multiply by 2
+        // PTS is at 48kHz, frame_size is at decode sample rate
         int64_t pts_gap = pkt_pts - expected_pts;
-        int64_t pts_per_frame = last_frame_size * 2;
+        int64_t pts_per_frame = last_frame_size * pts_scale;
         int missing_frames = (int)(pts_gap / pts_per_frame);
 
         if (missing_frames > 0) {
@@ -165,7 +168,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
                 memcpy(audio_buffer.buf, decoder_output, frame_size * sizeof(int16_t));
                 audio_buffer.len = frame_size * sizeof(int16_t);
                 // PTS for recovered frames: interpolate from expected_pts
-                audio_buffer.pts = expected_pts + (i * last_frame_size * 2);
+                audio_buffer.pts = expected_pts + (i * last_frame_size * pts_scale);
                 send_callback_for_many(buffer_ready_async, &audio_buffer);
               }
             }
@@ -187,8 +190,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       total_packets_decoded++;
 
       // Update expected PTS for next packet
-      // frame_size is at 24kHz, PTS is at 48kHz, so multiply by 2
-      expected_pts = pkt_pts + (frame_size * 2);
+      // frame_size is at decode sample rate, PTS is at 48kHz
+      expected_pts = pkt_pts + (frame_size * pts_scale);
 
       // Send decoded frame to Node.js callback
       if (buffer_ready_async != NULL) {
@@ -218,7 +221,7 @@ cleanup_thread:
 
   // Log decoding summary
   if (total_packets_decoded > 0) {
-    double total_duration_sec = (double)total_samples_decoded / OPUS_SAMPLE_RATE;
+    double total_duration_sec = (double)total_samples_decoded / opus_sample_rate;
     printf("Opus decode finished: %lld packets, %lld samples (%.2f sec), %lld missing frames recovered\n",
            (long long)total_packets_decoded,
            (long long)total_samples_decoded,

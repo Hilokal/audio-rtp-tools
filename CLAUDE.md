@@ -42,12 +42,12 @@ All audio processing runs on dedicated pthreads, not the Node.js event loop. Com
 ### Encode pipeline (`src/audio_encode_thread.cc`)
 
 `audio_encode_thread` → spawns a child `producer_thread` (raw pthread, not NAPI-managed):
-1. Creates an Opus encoder (24kHz input, stereo, VOIP application)
+1. Creates an Opus encoder (caller-specified sample rate via `params.sampleRate`, stereo, VOIP application)
 2. Starts a producer thread with RTP/SRTP parameters
-3. Main loop: receives `POST_PCM_BUFFER` messages, accumulates mono 16-bit PCM into 20ms frames (480 samples at 24kHz), converts mono→stereo, encodes with libopus, posts `AVPacket` to producer thread
+3. Main loop: receives `POST_PCM_BUFFER` messages, accumulates mono 16-bit PCM into 20ms frames, converts mono→stereo, encodes with libopus, posts `AVPacket` to producer thread
 4. Also handles runtime config messages: `SET_ENCODER_BITRATE`, `SET_ENCODER_FEC`, `SET_ENCODER_PACKET_LOSS_PERC`
 
-Key constants: input 24kHz, output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes.
+Key constants: output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes. Input sample rate is configurable.
 
 ### Decode pipeline (`src/audio_decode_thread.cc`)
 

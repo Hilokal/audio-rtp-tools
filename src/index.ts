@@ -7,6 +7,8 @@ type ProduceOptions = {
   rtcpPort: number;
   enableSrtp: boolean;
   onError: (error: Error) => void;
+  // sample rate of the pcm audio data that will be passed into the sendAudioData function
+  sampleRate: number;
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
@@ -26,6 +28,10 @@ type ConsumeOptions = {
   sdp: string;
   onAudioData: (data: Buffer) => void;
   onError: (error: Error) => void;
+
+  // Sample rate that the audio data will be decoded to.
+  // Must be one of 8000, 12000, 16000, 24000, 48000
+  sampleRate: number;
 };
 
 type ConsumeReturn = {
@@ -54,6 +60,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
       ssrc: String(ssrc),
       payloadType: String(payloadType),
       cname,
+      sampleRate: options.sampleRate,
       bitrate: options.opus?.bitrate ?? 0,
       enableFec: options.opus?.enableFec ?? false,
       packetLossPercent: options.opus?.packetLossPercent ?? 0,
@@ -85,7 +92,13 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     native.postSetPacketLossPercent(external, percent);
   }
 
-  return { shutdown, sendAudioData, setBitrate, setEnableFec, setPacketLossPercent };
+  return {
+    shutdown,
+    sendAudioData,
+    setBitrate,
+    setEnableFec,
+    setPacketLossPercent,
+  };
 }
 
 export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
@@ -95,9 +108,8 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     dataUrl(options.sdp),
     options.onAudioData,
     abortController.signal,
-    // TODO: Allow client to specify these values
     {
-      sampleRate: 24000,
+      sampleRate: options.sampleRate,
       channels: 1,
     },
   );

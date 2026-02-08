@@ -9,6 +9,7 @@ struct AudioEncodeThreadParams {
   char *cname;
   char *cryptoSuite;  // e.g., "AES_CM_128_HMAC_SHA1_80" or NULL
   char *keyBase64;    // base64-encoded SRTP key or NULL
+  int32_t sampleRate; // input PCM sample rate (e.g., 24000, 48000)
   int32_t bitrate;    // e.g., 32000 for speech
   bool enableFec;
   int32_t packetLossPercent;
