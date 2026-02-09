@@ -25,6 +25,9 @@ enum ThreadMessageType {
 
   // Flush remaining PCM in the encoder accumulator, then reset PTS
   FLUSH_OPUS_ENCODER,
+
+  // Drain the producer thread's packet queue
+  CLEAR_PRODUCER_QUEUE,
 };
 
 union ThreadMessageParameter {
@@ -54,6 +57,7 @@ int post_set_bitrate_to_thread(AVThreadMessageQueue *mq, int32_t bitrate);
 int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable);
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent);
 int post_flush_encoder_to_thread(AVThreadMessageQueue *mq);
+int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq);
 
 
 // This should be sent to av_thread_message_queue_set_free_func after initialization

@@ -39,9 +39,6 @@ type ConsumeReturn = {
   shutdown: () => Promise<void>;
 };
 
-// TODO: Expose error codes and messages
-class AudioRtpError extends Error {}
-
 export function produceRtp(options: ProduceOptions): ProduceReturn {
   const rtpUrl = `rtp://127.0.0.1:${options.rtpPort}`;
   const cname = randomBytes(8).toString("hex");
@@ -75,6 +72,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
   function shutdown(options: { immediate?: boolean } = {}) {
     if (options.immediate) {
       native.clearMessageQueue(external);
+      native.postClearProducerQueue(external);
     }
 
     abortController.abort();

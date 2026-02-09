@@ -133,6 +133,18 @@ int post_flush_encoder_to_thread(AVThreadMessageQueue *mq) {
   return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 }
 
+int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq) {
+  ThreadMessage thread_message = {
+    .type = CLEAR_PRODUCER_QUEUE,
+    .param = {
+      .pkt = NULL
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent) {
   ThreadMessage thread_message = {
     .type = SET_ENCODER_PACKET_LOSS_PERC,

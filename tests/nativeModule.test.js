@@ -1,7 +1,6 @@
 const { produceRtp, consumeRtp } = require("../src/index.ts");
 
 const { exec } = require("child_process");
-const { Buffer } = require("buffer");
 const { getRandomValues } = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -25,14 +24,6 @@ function buildSdp({ ssrc, payloadType }) {
     `a=rtpmap:${payloadType} opus/48000/2`,
     "",
   ].join("\r\n");
-}
-
-function dataUrl(input) {
-  return "data:application/sdp;base64," + Buffer.from(input).toString("base64");
-}
-
-async function waitFor(timeout) {
-  return new Promise((resolve) => setTimeout(resolve, timeout));
 }
 
 function runProducer() {
@@ -108,6 +99,8 @@ it(
     await shutdownProducer({ immediate: false });
 
     await shutdownConsumer();
+
+    expect(buffersReceived).toBe(420);
   },
   10 * 1000,
 );
