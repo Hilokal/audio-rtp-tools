@@ -1,5 +1,5 @@
 const native = require("../build/Release/worker.node");
-const { randomBytes, getRandomValues } = require("crypto");
+const { randomBytes } = require("crypto");
 
 export type SrtpParameters = {
   cryptoSuite: string;
@@ -14,6 +14,9 @@ type ProduceOptions = {
   onError: (error: Error) => void;
   // sample rate of the pcm audio data that will be passed into the sendAudioData function
   sampleRate: number;
+  ssrc: number;
+  payloadType: number;
+  cname: string;
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
@@ -45,14 +48,8 @@ type ConsumeReturn = {
 };
 
 export function produceRtp(options: ProduceOptions): ProduceReturn {
-  const rtpUrl = `rtp://127.0.0.1:${options.rtpPort}`;
-  const cname = randomBytes(8).toString("hex");
-  const list = new Int32Array(1);
-  getRandomValues(list);
-  const ssrc = Math.abs(list[0]);
-
-  // TODO: I don't like hardcoding these
-  const payloadType = "97";
+  const host = options.ipAddress.includes(":") ? `[${options.ipAddress}]` : options.ipAddress;
+  const rtpUrl = `rtp://${host}:${options.rtpPort}`;
 
   const abortController = new AbortController();
 
@@ -60,9 +57,9 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     abortController.signal,
     {
       rtpUrl,
-      ssrc: String(ssrc),
-      payloadType: String(payloadType),
-      cname,
+      ssrc: String(options.ssrc),
+      payloadType: String(options.payloadType),
+      cname: options.cname,
       sampleRate: options.sampleRate,
       bitrate: options.opus?.bitrate ?? 0,
       enableFec: options.opus?.enableFec ?? false,
