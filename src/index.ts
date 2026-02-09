@@ -18,6 +18,7 @@ type ProduceOptions = {
 
 type ProduceReturn = {
   sendAudioData: (data: Buffer) => void;
+  flush: () => void;
   setBitrate: (bitrate: number | null) => void;
   setEnableFec: (enableFec: boolean) => void;
   setPacketLossPercent: (percent: number) => void;
@@ -92,9 +93,14 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     native.postSetPacketLossPercent(external, percent);
   }
 
+  function flush() {
+    native.postFlushEncoder(external);
+  }
+
   return {
     shutdown,
     sendAudioData,
+    flush,
     setBitrate,
     setEnableFec,
     setPacketLossPercent,

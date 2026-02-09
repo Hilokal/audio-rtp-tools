@@ -552,6 +552,22 @@ namespace hilokal {
     return ret;
   }
 
+  napi_value postFlushEncoder(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 1;
+    napi_value args[1];
+    napi_status status = napi_ok;
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    AVThreadMessageQueue *message_queue;
+    status = napi_get_value_external(env, args[0], (void **)&message_queue);
+    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
+
+    post_flush_encoder_to_thread(message_queue);
+    return NULL;
+  }
+
   napi_value postPcmToEncoder(napi_env env, napi_callback_info cbinfo) {
     size_t argsLength = 2;
     napi_value args[2];
@@ -683,6 +699,9 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "postSetPacketLossPercent", postSetPacketLossPercent);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "postFlushEncoder", postFlushEncoder);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     av_log_set_callback(av_log_override_callback);

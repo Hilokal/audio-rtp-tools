@@ -121,6 +121,18 @@ int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable) {
   return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 }
 
+int post_flush_encoder_to_thread(AVThreadMessageQueue *mq) {
+  ThreadMessage thread_message = {
+    .type = FLUSH_OPUS_ENCODER,
+    .param = {
+      .pkt = NULL
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent) {
   ThreadMessage thread_message = {
     .type = SET_ENCODER_PACKET_LOSS_PERC,

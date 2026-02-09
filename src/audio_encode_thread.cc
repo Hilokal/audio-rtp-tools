@@ -198,6 +198,38 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
       // Free the PCM buffer
       thread_message_free_func(&thread_message);
+    } else if (thread_message.type == FLUSH_OPUS_ENCODER) {
+      // Encode any remaining accumulated PCM with zero-padding
+      if (accum_pos > 0) {
+        // Zero-pad the rest of the frame
+        memset(mono_accum + accum_pos, 0, (frame_size_input - accum_pos) * sizeof(int16_t));
+
+        // Convert mono to stereo (duplicate each sample)
+        for (int i = 0; i < frame_size_input; i++) {
+          stereo_frame[i * 2] = mono_accum[i];
+          stereo_frame[i * 2 + 1] = mono_accum[i];
+        }
+
+        int encoded_len = opus_encode(opus_encoder, stereo_frame, frame_size_input, opus_data, MAX_OPUS_FRAME_SIZE);
+        if (encoded_len > 0) {
+          AVPacket *pkt = av_packet_alloc();
+          if (pkt != NULL && av_new_packet(pkt, encoded_len) == 0) {
+            memcpy(pkt->data, opus_data, encoded_len);
+            pkt->size = encoded_len;
+            pkt->pts = pts;
+            pkt->dts = pts;
+            pkt->duration = FRAME_SIZE_OUTPUT;
+
+            post_packet_to_thread(producer_thread->message_queue, pkt, AV_THREAD_MESSAGE_NONBLOCK);
+          }
+          if (pkt != NULL) {
+            av_packet_free(&pkt);
+          }
+        }
+
+        accum_pos = 0;
+      }
+      pts = 0;
     } else if (thread_message.type == SET_ENCODER_BITRATE) {
       opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(
         thread_message.param.int_value > 0 ? thread_message.param.int_value : OPUS_AUTO));
