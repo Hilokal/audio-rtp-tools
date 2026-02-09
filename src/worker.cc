@@ -536,6 +536,7 @@ namespace hilokal {
     status = get_option_string(env, args[1], "keyBase64", &params.keyBase64);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
+
     status = get_option_int32(env, args[1], "bitrate", &params.bitrate);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 

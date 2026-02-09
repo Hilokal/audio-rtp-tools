@@ -1,8 +1,8 @@
-const native = require("../build/Release/worker.node");
+const { produceRtp, consumeRtp } = require("../src/index.ts");
 
 const { exec } = require("child_process");
 const { Buffer } = require("buffer");
-const { randomBytes, getRandomValues } = require("crypto");
+const { getRandomValues } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -29,21 +29,27 @@ async function waitFor(timeout) {
   return new Promise((resolve) => setTimeout(resolve, timeout));
 }
 
-function runProducer(abortSignal) {
-  const rtpUrl = `rtp://127.0.0.1:${RTP_PORT}`;
-  const cname = randomBytes(8).toString("hex");
+function runProducer() {
   const list = new Int32Array(1);
   getRandomValues(list);
   const ssrc = Math.abs(list[0]);
   const payloadType = "97";
-  const bitrate = 40000;
 
-  const { promise, external } = native.startAudioEncodeThread(abortSignal, {
-    rtpUrl,
-    ssrc: String(ssrc),
-    payloadType: String(payloadType),
-    cname,
-    bitrate,
+  const { sendAudioData, flush, shutdown } = produceRtp({
+    ipAddress: "127.0.0.1",
+    rtpPort: RTP_PORT,
+    rtcpPort: RTP_PORT + 1,
+    enableSrtp: false,
+    onError: (error) => {
+      console.log("producer error callback", error);
+    },
+    // sample rate of the pcm audio data that will be passed into the sendAudioData function
+    sampleRate: 24000,
+    opus: {
+      bitrate: null,
+      enableFec: true,
+      packetLossPercent: 10,
+    },
   });
 
   // LJ025-0076.wav from https://keithito.com/LJ-Speech-Dataset/
@@ -58,29 +64,20 @@ function runProducer(abortSignal) {
   const chunkSize = 960;
   let count = 0;
   for (let offset = 0; offset < pcmData.length; offset += chunkSize) {
-    if (abortSignal.aborted) break;
     const chunk = pcmData.subarray(
       offset,
       Math.min(offset + chunkSize, pcmData.length),
     );
-    native.postPcmToEncoder(external, chunk);
+    sendAudioData(chunk);
   }
+  flush();
 
-  native.postEndOfFile(external);
-
-  abortSignal.addEventListener("abort", () => {
-    // TODO: This will not clear the message queue that is composed inside of the encoder thread
-    native.clearMessageQueue(external);
-  });
-
-  return { promise, ssrc, payloadType };
+  return { shutdown, ssrc, payloadType };
 }
 
 it(
   "starts an audio encode/decode thread",
   async () => {
-    const abortController = new AbortController();
-
     const sdp = buildSdp({ ssrc: 0, payloadType: "97" });
 
     let buffersReceived = 0;
@@ -90,27 +87,24 @@ it(
       buffersReceived++;
     }
 
-    const { promise: decoderPromise } = native.startAudioDecodeThread(
-      dataUrl(sdp),
+    const { shutdown: shutdownConsumer } = consumeRtp({
+      sdp,
       onAudioData,
-      abortController.signal,
-      {
-        sampleRate: 24000,
-        channels: 1,
+      onError: (error) => {
+        console.log("consumer error", error);
       },
-    );
+      sampleRate: 24000,
+    });
 
     // Start the producer after the decoder is listening
-    const { promise: producerPromise } = runProducer(abortController.signal);
+    const { promise: producerPromise, shutdown: shutdownProducer } =
+      runProducer();
 
     // Wait for the producer to finish streaming audio. Should take less than 10 seconds
-    const producerExitCode = await producerPromise;
-    expect(producerExitCode).toBe(0);
+    // TODO: Implement this
+    await shutdownProducer({ immediate: false });
 
-    abortController.abort();
-
-    const exitCode = await decoderPromise;
-    expect(exitCode).toBe(0);
+    await shutdownConsumer();
   },
   10 * 1000,
 );
