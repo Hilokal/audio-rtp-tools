@@ -100,7 +100,7 @@ it(
       },
     );
 
-    //   // Start the producer after the decoder is listening
+    // Start the producer after the decoder is listening
     const { promise: producerPromise } = runProducer(abortController.signal);
 
     // Wait for the producer to finish streaming audio. Should take less than 10 seconds

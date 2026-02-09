@@ -209,7 +209,7 @@ namespace hilokal {
     napi_value ret;
     napi_status status = napi_ok;
 
-    struct ProducerThreadParams params;
+    struct ProducerThreadParams params = {};
 
     status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
@@ -231,6 +231,16 @@ namespace hilokal {
 
     status = get_option_string(env, args[1], "ssrc", &params.ssrc);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    if (status != napi_ok) {
+      av_freep(&params.url);
+      av_freep(&params.cname);
+      av_freep(&params.cryptoSuite);
+      av_freep(&params.keyBase64);
+      av_freep(&params.payloadType);
+      av_freep(&params.ssrc);
+      return NULL;
+    }
 
     napi_value abort_signal = args[0];
     napi_value external;
@@ -311,7 +321,7 @@ namespace hilokal {
     napi_status status = napi_ok;
     napi_value promise;
 
-    struct AudioDecodeThreadParams params;
+    struct AudioDecodeThreadParams params = {};
 
     status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
@@ -336,6 +346,11 @@ namespace hilokal {
 
     status = get_option_int32(env, args[3], "channels", &params.channels);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    if (status != napi_ok) {
+      av_freep(&params.sdpBase64);
+      return NULL;
+    }
 
     napi_value on_audio_callback = args[1];
     napi_value abort_signal = args[2];
@@ -498,7 +513,7 @@ namespace hilokal {
     napi_value ret;
     napi_status status = napi_ok;
 
-    struct AudioEncodeThreadParams params;
+    struct AudioEncodeThreadParams params = {};
 
     status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
@@ -532,6 +547,16 @@ namespace hilokal {
 
     status = get_option_int32(env, args[1], "sampleRate", &params.sampleRate);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    if (status != napi_ok) {
+        av_freep(&params.rtpUrl);
+        av_freep(&params.ssrc);
+        av_freep(&params.payloadType);
+        av_freep(&params.cname);
+        av_freep(&params.cryptoSuite);
+        av_freep(&params.keyBase64);
+        return NULL;
+    }
 
     napi_value abort_signal = args[0];
     napi_value external;
