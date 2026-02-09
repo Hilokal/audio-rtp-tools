@@ -2,6 +2,7 @@
   "name": "audio-rtp-tools",
   "version": "1.0.0",
   "main": "dist/index.js",
+  "files": ["dist", "build", "binding.gyp", "src/*.cc", "src/*.h"],
   "license": "MIT",
   "scripts": {
     "build": "tsc",
