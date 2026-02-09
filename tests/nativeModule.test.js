@@ -8,6 +8,12 @@ const path = require("path");
 
 const RTP_PORT = 9004;
 
+// This should match the test wav file
+const encodeSampleRate = 24000;
+
+// Decode at a different sample rate.
+const decodeSampleRate = 16000;
+
 function buildSdp({ ssrc, payloadType }) {
   return [
     "v=0",
@@ -33,7 +39,6 @@ function runProducer() {
   const list = new Int32Array(1);
   getRandomValues(list);
   const ssrc = Math.abs(list[0]);
-  const payloadType = "97";
 
   const { sendAudioData, flush, shutdown } = produceRtp({
     ipAddress: "127.0.0.1",
@@ -43,8 +48,7 @@ function runProducer() {
     onError: (error) => {
       console.log("producer error callback", error);
     },
-    // sample rate of the pcm audio data that will be passed into the sendAudioData function
-    sampleRate: 24000,
+    sampleRate: encodeSampleRate,
     opus: {
       bitrate: null,
       enableFec: true,
@@ -72,7 +76,7 @@ function runProducer() {
   }
   flush();
 
-  return { shutdown, ssrc, payloadType };
+  return { shutdown };
 }
 
 it(
@@ -93,7 +97,7 @@ it(
       onError: (error) => {
         console.log("consumer error", error);
       },
-      sampleRate: 24000,
+      sampleRate: decodeSampleRate,
     });
 
     // Start the producer after the decoder is listening
@@ -101,7 +105,6 @@ it(
       runProducer();
 
     // Wait for the producer to finish streaming audio. Should take less than 10 seconds
-    // TODO: Implement this
     await shutdownProducer({ immediate: false });
 
     await shutdownConsumer();

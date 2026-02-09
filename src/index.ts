@@ -22,7 +22,7 @@ type ProduceReturn = {
   setBitrate: (bitrate: number | null) => void;
   setEnableFec: (enableFec: boolean) => void;
   setPacketLossPercent: (percent: number) => void;
-  shutdown: () => Promise<void>;
+  shutdown: (options?: { immediate?: false }) => Promise<void>;
 };
 
 type ConsumeOptions = {
@@ -72,7 +72,11 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     options.onError(error);
   });
 
-  function shutdown() {
+  function shutdown(options: { immediate?: boolean } = {}) {
+    if (options.immediate) {
+      native.clearMessageQueue(external);
+    }
+
     abortController.abort();
     return promise;
   }
