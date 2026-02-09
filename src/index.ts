@@ -1,11 +1,16 @@
 const native = require("../build/Release/worker.node");
 const { randomBytes, getRandomValues } = require("crypto");
 
+export type SrtpParameters = {
+  cryptoSuite: string;
+  keyBase64: string;
+};
+
 type ProduceOptions = {
   ipAddress: string;
   rtpPort: number;
   rtcpPort: number;
-  enableSrtp: boolean;
+  srtpParameters?: SrtpParameters;
   onError: (error: Error) => void;
   // sample rate of the pcm audio data that will be passed into the sendAudioData function
   sampleRate: number;
@@ -62,6 +67,8 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
       bitrate: options.opus?.bitrate ?? 0,
       enableFec: options.opus?.enableFec ?? false,
       packetLossPercent: options.opus?.packetLossPercent ?? 0,
+      cryptoSuite: options.srtpParameters?.cryptoSuite,
+      keyBase64: options.srtpParameters?.keyBase64,
     },
   );
 
@@ -106,6 +113,13 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     setBitrate,
     setEnableFec,
     setPacketLossPercent,
+  };
+}
+
+export function createSrtpParameters(): SrtpParameters {
+  return {
+    cryptoSuite: "AES_CM_128_HMAC_SHA1_80",
+    keyBase64: randomBytes(30).toString("base64"),
   };
 }
 

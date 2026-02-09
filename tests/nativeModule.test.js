@@ -1,4 +1,8 @@
-const { produceRtp, consumeRtp } = require("../src/index.ts");
+const {
+  produceRtp,
+  consumeRtp,
+  createSrtpParameters,
+} = require("../src/index.ts");
 
 const { exec } = require("child_process");
 const { getRandomValues } = require("crypto");
