@@ -22,7 +22,7 @@ type ProduceOptions = {
 };
 
 type ProduceReturn = {
-  sendAudioData: (data: Buffer) => void;
+  sendAudioData: (data: Buffer) => boolean;
   flush: () => void;
   setBitrate: (bitrate: number | null) => void;
   setEnableFec: (enableFec: boolean) => void;
@@ -32,7 +32,7 @@ type ProduceReturn = {
 
 type ConsumeOptions = {
   sdp: string;
-  onAudioData: (data: Buffer) => void;
+  onAudioData: (data: { buffer: Buffer; pts: number | null }) => void;
   onError: (error: Error) => void;
 
   // Sample rate that the audio data will be decoded to.
@@ -86,8 +86,8 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     return promise;
   }
 
-  function sendAudioData(buffer: Buffer) {
-    native.postPcmToEncoder(external, buffer);
+  function sendAudioData(buffer: Buffer): boolean {
+    return native.postPcmToEncoder(external, buffer);
   }
 
   function setBitrate(bitrate: number | null) {
