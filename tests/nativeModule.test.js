@@ -44,6 +44,9 @@ function runProducer() {
       console.log("producer error callback", error);
     },
     sampleRate: encodeSampleRate,
+    ssrc,
+    payloadType: 97,
+    cname: "test",
     opus: {
       bitrate: null,
       enableFec: true,
