@@ -129,6 +129,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadP
           rebase_pts, now_pts, pkt->pts, last_pts
         );
         rebase_pts = now_pts;
+        // Reset next_expected_pts so the drop check (below) doesn't compare
+        // the new stream's PTS against the old stream's expected PTS.
+        next_expected_pts = AV_NOPTS_VALUE;
       }
 
       last_pts = pkt->pts;
