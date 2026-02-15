@@ -46,6 +46,7 @@ All audio processing runs on dedicated pthreads, not the Node.js event loop. Com
 2. Starts a producer thread with RTP/SRTP parameters
 3. Main loop: receives `POST_PCM_BUFFER` messages, accumulates mono 16-bit PCM into 20ms frames, converts mono→stereo, encodes with libopus, posts `AVPacket` to producer thread
 4. Also handles runtime config messages: `SET_ENCODER_BITRATE`, `SET_ENCODER_FEC`, `SET_ENCODER_PACKET_LOSS_PERC`
+5. `FLUSH_OPUS_ENCODER` message (triggered by `endSegment()`) flushes any partial frame and resets PTS to 0, causing the producer thread to rebase timestamps to wall-clock time on the next packet
 
 Key constants: output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes. Input sample rate is configurable.
 

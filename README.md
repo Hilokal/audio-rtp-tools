@@ -115,7 +115,7 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 | `rtcpPort` | `number` | Destination RTCP port |
 | `rtpParameters` | `RtpParameters` | RTP codec and encoding configuration |
 | `sampleRate` | `number` | Sample rate of the input PCM data |
-| `onError` | `(error: Error) => void` | Error callback |
+| `onError` | `(error: Error) => void?` | Error callback (optional) |
 | `srtpParameters` | `SrtpParameters?` | SRTP encryption parameters (optional) |
 | `signal` | `AbortSignal?` | Abort signal for immediate shutdown (optional) |
 | `opus.bitrate` | `number \| null?` | Opus encoder bitrate in bps, or `null` for auto |
@@ -125,7 +125,7 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 **Returns** an object with:
 
 - **`write(data: Buffer): boolean`** — Queue PCM data for encoding. Data should be 16-bit signed mono PCM at the sample rate specified in options.
-- **`flush(): void`** — Flush any buffered data to the encoder.
+- **`endSegment(): void`** — Signal the end of a contiguous audio segment. Flushes any partial frame and resets timing so the next `write()` starts a fresh segment with timestamps rebased to wall-clock time. Call this between distinct stretches of audio (e.g. between AI model turns).
 - **`end(): void`** — Signal end of stream. The thread will finish sending queued data before shutting down.
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
 - **`setBitrate(bitrate: number | null): void`** — Change encoder bitrate at runtime.
@@ -144,7 +144,7 @@ Receives an RTP Opus stream and decodes it to PCM.
 | `sampleRate` | `number` | Output sample rate (8000, 12000, 16000, 24000, or 48000) |
 | `signal` | `AbortSignal` | Abort signal to stop the consumer |
 | `onAudioData` | `(data: { buffer: Buffer; pts: number \| null }) => void` | Called for each decoded audio frame |
-| `onError` | `(error: Error) => void` | Error callback |
+| `onError` | `(error: Error) => void?` | Error callback (optional) |
 
 **Returns** an object with:
 
@@ -188,14 +188,7 @@ Exported from `audio-rtp-tools/dist/network`:
 
 ### Types
 
-The `RtpParameters` type is compatible with [mediasoup's RTP parameters](https://mediasoup.org/documentation/v3/mediasoup/rtp-parameters-and-capabilities/). The `SrtpParameters` type is:
-
-```ts
-type SrtpParameters = {
-  cryptoSuite: string;
-  keyBase64: string;
-};
-```
+Both `RtpParameters` and `SrtpParameters` are API-compatible with the types used in [mediasoup](https://mediasoup.org/documentation/v3/mediasoup/rtp-parameters-and-capabilities/) — you can pass them directly without conversion.
 
 ## How it works
 

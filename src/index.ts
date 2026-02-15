@@ -20,7 +20,7 @@ type ProduceOptions = {
   // sample rate of the pcm audio data that will be passed into the write function
   sampleRate: number;
 
-  onError: (error: Error) => void;
+  onError?: (error: Error) => void;
 
   // Use this to enable encryption. This is the result of the createSrtpParameters function.
   srtpParameters?: SrtpParameters;
@@ -39,8 +39,9 @@ type ProduceReturn = {
   // Queues up PCM data to be sent
   write: (data: Buffer) => boolean;
 
-  // Call this after one or many calls to write().
-  flush: () => void;
+  // Signal the end of a contiguous audio segment. Flushes any partial frame
+  // and resets timing so the next write() starts a fresh segment.
+  endSegment: () => void;
 
   // Called when you are done sending data. The thread will shutdown when it's
   // finished sending any queued data.
@@ -60,7 +61,7 @@ type ProduceReturn = {
 type ConsumeOptions = {
   sdp: string;
   onAudioData: (data: { buffer: Buffer; pts: number | null }) => void;
-  onError: (error: Error) => void;
+  onError?: (error: Error) => void;
 
   // Sample rate that the audio data will be decoded to.
   // Must be one of 8000, 12000, 16000, 24000, 48000
@@ -121,9 +122,11 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     keyBase64: srtpParameters?.keyBase64,
   });
 
-  promise.catch((error: any) => {
-    options.onError(error);
-  });
+  if (options.onError) {
+    promise.catch((error: any) => {
+      options.onError!(error);
+    });
+  }
 
   function end() {
     native.postEndOfFile(external);
@@ -167,7 +170,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     native.postSetPacketLossPercent(external, percent);
   }
 
-  function flush() {
+  function endSegment() {
     native.postFlushEncoder(external);
   }
 
@@ -175,7 +178,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     end,
     done,
     write,
-    flush,
+    endSegment,
     setBitrate,
     setEnableFec,
     setPacketLossPercent,
@@ -339,9 +342,11 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     },
   );
 
-  promise.catch((error: any) => {
-    options.onError(error);
-  });
+  if (options.onError) {
+    promise.catch((error: any) => {
+      options.onError!(error);
+    });
+  }
 
   function done() {
     return promise;
