@@ -222,4 +222,4 @@ The core of this project — the native C++ addon, threading architecture, encod
 
 ## License
 
-MIT
+ISC
