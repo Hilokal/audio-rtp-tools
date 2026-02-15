@@ -73,10 +73,19 @@ static void abort_signal_handler_finalizer(napi_env env, void* finalize_data, vo
 }
 
 static napi_status add_abort_event_listener(napi_env env, napi_value signal, napi_value js_message_queue) {
+  napi_valuetype signal_type;
+  napi_status status;
+
+  status = napi_typeof(env, signal, &signal_type);
+  if (status != napi_ok)
+    return status;
+
+  if (signal_type == napi_undefined || signal_type == napi_null)
+    return napi_ok;
+
   napi_value js_key;
   napi_value js_add_event_listener;
   napi_value result;
-  napi_status status;
 
   status = napi_create_string_utf8(env, "addEventListener", NAPI_AUTO_LENGTH, &js_key);
   if (status != napi_ok)

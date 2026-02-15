@@ -18,13 +18,14 @@ const encodeSampleRate = 24000;
 // Decode at a different sample rate.
 const decodeSampleRate = 16000;
 
-function runProducer({ rtpParameters, srtpParameters }) {
-  const { sendAudioData, flush, shutdown } = produceRtp({
+function runProducer({ rtpParameters, srtpParameters, signal }) {
+  const producer = produceRtp({
     ipAddress: "127.0.0.1",
     rtpPort: RTP_PORT,
     rtcpPort: RTP_PORT + 1,
     rtpParameters,
     srtpParameters,
+    signal,
     onError: (error) => {
       console.log("producer error callback", error);
     },
@@ -51,12 +52,30 @@ function runProducer({ rtpParameters, srtpParameters }) {
       offset,
       Math.min(offset + chunkSize, pcmData.length),
     );
-    sendAudioData(chunk);
+    producer.write(chunk);
   }
-  flush();
+  producer.end();
 
-  return { shutdown };
+  return { done: producer.done };
 }
+
+it("aborts a producer thread", async () => {
+  const rtpParameters = createRtpParameters();
+  const srtpParameters = createSrtpParameters();
+
+  const abortController = new AbortController();
+
+  const { done } = runProducer({
+    rtpParameters,
+    srtpParameters,
+    signal: abortController.signal,
+  });
+
+  abortController.abort();
+
+  // This should abort right away
+  await done();
+});
 
 it(
   "starts an audio encode/decode thread",
@@ -82,23 +101,32 @@ it(
       buffersReceived++;
     }
 
-    const { shutdown: shutdownConsumer } = consumeRtp({
+    const abortController = new AbortController();
+
+    const { done: consumerDone } = consumeRtp({
       sdp,
       onAudioData,
       onError: (error) => {
         console.log("consumer error", error);
       },
       sampleRate: decodeSampleRate,
+      signal: abortController.signal,
     });
 
     // Start the producer after the decoder is listening
-    const { promise: producerPromise, shutdown: shutdownProducer } =
-      runProducer({ rtpParameters, srtpParameters });
+    const { done: producerDone } = runProducer({
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+    });
 
     // Wait for the producer to finish streaming audio. Should take less than 10 seconds
-    await shutdownProducer({ immediate: false });
+    await producerDone();
 
-    await shutdownConsumer();
+    // Signal for the consumer to shutdown
+    abortController.abort();
+
+    await consumerDone();
 
     // This will usually be 420
     expect(buffersReceived).toBeGreaterThan(410);

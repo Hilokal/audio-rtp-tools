@@ -16,10 +16,18 @@ type ProduceOptions = {
   rtpParameters: RtpParameters;
   rtpPort: number;
   rtcpPort: number;
-  srtpParameters?: SrtpParameters;
-  onError: (error: Error) => void;
-  // sample rate of the pcm audio data that will be passed into the sendAudioData function
+
+  // sample rate of the pcm audio data that will be passed into the write function
   sampleRate: number;
+
+  onError: (error: Error) => void;
+
+  // Use this to enable encryption. This is the result of the createSrtpParameters function.
+  srtpParameters?: SrtpParameters;
+
+  // If this signal is raised, the sending thread will shutdown immediately.
+  signal?: AbortSignal;
+
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
@@ -28,12 +36,25 @@ type ProduceOptions = {
 };
 
 type ProduceReturn = {
-  sendAudioData: (data: Buffer) => boolean;
+  // Queues up PCM data to be sent
+  write: (data: Buffer) => boolean;
+
+  // Call this after one or many calls to write().
   flush: () => void;
+
+  // Called when you are done sending data. The thread will shutdown when it's
+  // finished sending any queued data.
+  end: () => void;
+
+  // Await this to wait until the thread is finished. The thread will finished when one of the following happens:
+  // - end() is called and the thread has finished broadcasting the RTP packets
+  // - signal() is aborted, and the thread will exit immediately
+  // - An error is raised
+  done: () => Promise<void>;
+
   setBitrate: (bitrate: number | null) => void;
   setEnableFec: (enableFec: boolean) => void;
   setPacketLossPercent: (percent: number) => void;
-  shutdown: (options?: { immediate?: false }) => Promise<void>;
 };
 
 type ConsumeOptions = {
@@ -44,14 +65,16 @@ type ConsumeOptions = {
   // Sample rate that the audio data will be decoded to.
   // Must be one of 8000, 12000, 16000, 24000, 48000
   sampleRate: number;
+
+  signal: AbortSignal;
 };
 
 type ConsumeReturn = {
-  shutdown: () => Promise<void>;
+  done: () => Promise<void>;
 };
 
 export function produceRtp(options: ProduceOptions): ProduceReturn {
-  const { rtpParameters, srtpParameters } = options;
+  const { rtpParameters, srtpParameters, signal } = options;
 
   const host = options.ipAddress.includes(":")
     ? `[${options.ipAddress}]`
@@ -59,8 +82,6 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
 
   const protocol = options.srtpParameters ? "srtp://" : "rtp://";
   const rtpUrl = `${protocol}${host}:${options.rtpPort}`;
-
-  const abortController = new AbortController();
 
   // TODO: We could probably support disabling rtcp
   if (rtpParameters.rtcp == null) {
@@ -87,37 +108,50 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
 
   const ssrc = rtpParameters.encodings[0].ssrc;
 
-  const { promise, external } = native.startAudioEncodeThread(
-    abortController.signal,
-    {
-      rtpUrl,
-      ssrc: String(ssrc),
-      payloadType: String(payloadType),
-      cname: cname,
-      sampleRate: options.sampleRate,
-      bitrate: options.opus?.bitrate ?? 0,
-      enableFec: options.opus?.enableFec ?? false,
-      packetLossPercent: options.opus?.packetLossPercent ?? 0,
-      cryptoSuite: srtpParameters?.cryptoSuite,
-      keyBase64: srtpParameters?.keyBase64,
-    },
-  );
+  const { promise, external } = native.startAudioEncodeThread(signal, {
+    rtpUrl,
+    ssrc: String(ssrc),
+    payloadType: String(payloadType),
+    cname: cname,
+    sampleRate: options.sampleRate,
+    bitrate: options.opus?.bitrate ?? 0,
+    enableFec: options.opus?.enableFec ?? false,
+    packetLossPercent: options.opus?.packetLossPercent ?? 0,
+    cryptoSuite: srtpParameters?.cryptoSuite,
+    keyBase64: srtpParameters?.keyBase64,
+  });
 
   promise.catch((error: any) => {
     options.onError(error);
   });
 
-  function shutdown(options: { immediate?: boolean } = {}) {
-    if (options.immediate) {
+  function end() {
+    native.postEndOfFile(external);
+  }
+
+  function done(): Promise<void> {
+    return promise;
+  }
+
+  if (signal) {
+    function listener() {
       native.clearMessageQueue(external);
       native.postClearProducerQueue(external);
     }
 
-    abortController.abort();
-    return promise;
+    signal.addEventListener("abort", listener, { once: true });
+
+    promise.then(
+      () => {
+        signal.removeEventListener("abort", listener);
+      },
+      () => {
+        /* Ignoring error. Just don't want a danging promise */
+      },
+    );
   }
 
-  function sendAudioData(buffer: Buffer): boolean {
+  function write(buffer: Buffer): boolean {
     return native.postPcmToEncoder(external, buffer);
   }
 
@@ -138,8 +172,9 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
   }
 
   return {
-    shutdown,
-    sendAudioData,
+    end,
+    done,
+    write,
     flush,
     setBitrate,
     setEnableFec,
@@ -294,12 +329,10 @@ function sdpParameters(parameters: Record<string, unknown>): string {
 }
 
 export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
-  const abortController = new AbortController();
-
   const { promise } = native.startAudioDecodeThread(
     dataUrl(options.sdp),
     options.onAudioData,
-    abortController.signal,
+    options.signal,
     {
       sampleRate: options.sampleRate,
       channels: 1,
@@ -310,12 +343,11 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     options.onError(error);
   });
 
-  function shutdown() {
-    abortController.abort();
+  function done() {
     return promise;
   }
 
-  return { shutdown };
+  return { done };
 }
 
 function dataUrl(input: string) {
