@@ -24,11 +24,11 @@ sudo apt install libavformat-dev libavcodec-dev libavutil-dev libswresample-dev 
 
 ## Installation
 
+Make sure you have the [prerequisites](#prerequisites) installed first — `npm install` compiles the native addon from source and needs the FFmpeg and Opus libraries available.
+
 ```bash
 npm install audio-rtp-tools
 ```
-
-This runs `node-gyp rebuild` during install to compile the native addon.
 
 ## Quick start
 
@@ -207,8 +207,9 @@ git clone <repo-url>
 cd audio-rtp-tools
 npm install
 node-gyp rebuild
-npm run build
 ```
+
+`npm install` installs dependencies and compiles the TypeScript. `node-gyp rebuild` compiles the native addon (this step is automatic when installing from npm, but must be run manually when building from a git clone).
 
 ## Tests
 
