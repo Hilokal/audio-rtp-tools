@@ -44,19 +44,43 @@ const {
 const rtpParameters = createRtpParameters();
 const srtpParameters = createSrtpParameters();
 
+// This is a signalling function you write.
+// Send rtpParameters and srtpParameters to the consuming
+// peer, maybe Mediasoup or something else.
+// Optionally, use createSDP to convert to SDP format.
+const { ipAddress, rtpPort, rtcpPort } = await sendToConsumingPeer({ rtpParameters, srtpParameters })
+
+// This should match the sample rate that you pass into
+// write(). This is NOT the same as the sample rate sent
+// over RTP. RTP-Opus packets are always 48000.
+const sampleRate = 24000;
+
 const producer = produceRtp({
-  ipAddress: "127.0.0.1",
-  rtpPort: 10000,
-  rtcpPort: 10001,
+  ipAddress,
+  rtpPort,
+  rtcpPort,
   rtpParameters,
   srtpParameters,
-  sampleRate: 24000,
+  sampleRate,
   onError: (err) => console.error(err),
 });
 
-// Write 16-bit mono PCM data
-producer.write(pcmBuffer);
-producer.end();
+// Setup event handlers on an imaginary AI model.
+aiModel.on("audio.delta", () => {
+  // Queue up 16-bit mono PCM data for sending over RTP
+  producer.write(pcmBuffer);
+});
+
+aiModel.on("audio.done", () => {
+  // This is necessary to keep timestamps consistent
+// between separate segments of audio.
+  producer.endSegment();
+});
+
+aiModel.on("finished", () => {
+  // Signal that no more audio will be sent.
+  producer.end();
+});
 
 await producer.done();
 ```
@@ -67,37 +91,49 @@ await producer.done();
 const {
   consumeRtp,
   createSDP,
-  createRtpParameters,
-  createSrtpParameters,
 } = require("audio-rtp-tools");
 
-const rtpParameters = createRtpParameters();
-const srtpParameters = createSrtpParameters();
+// Pick some local ports that are available. Make sure they
+// don't conflict with any other RTP streams or services.
+const rtpPort = 10000;
+const rtcpPort = 10001;
+const ipAddress = "127.0.0.1"
+
+// This is a signalling function you write
+const { rtpParameters, srtpParameters } = await sendToProducingPeer({ rtpPort, rtcpPort, ipAddress })
 
 const sdp = createSDP({
-  destinationIpAddress: "127.0.0.1",
-  rtpPort: 10000,
-  rtcpPort: 10001,
+  destinationIpAddress: ipAddress,
+  rtpPort,
+  rtcpPort,
   rtpParameters,
   srtpParameters,
 });
 
 const abortController = new AbortController();
 
+// Most AI models want something like 16000.
+// OpenAI usually wants 24000. This is the sample rate
+// the decoder will generate and pass to onAudioData,
+// NOT the sample rate sent over RTP.
+// RTP-Opus packets are always 48000.
+const sampleRate = 16000;
+
 const consumer = consumeRtp({
   sdp,
-  sampleRate: 16000,
+  sampleRate,
   signal: abortController.signal,
   onAudioData: ({ buffer, pts }) => {
     // buffer is 16-bit mono PCM at the requested sample rate
-    process.stdout.write(buffer);
+    aiModel.processPCMData(buffer);
   },
   onError: (err) => console.error(err),
 });
 
-// Later, when you want to stop:
+// Called when you want to stop receiving audio.
 abortController.abort();
 await consumer.done();
+
 ```
 
 ## API
