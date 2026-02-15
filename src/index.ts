@@ -1,5 +1,10 @@
 const native = require("../build/Release/worker.node");
-const { randomBytes } = require("crypto");
+import { isIPv6 } from "net";
+import { randomBytes, getRandomValues } from "crypto";
+
+// Taken from mediasoup source
+// https://github.com/versatica/mediasoup/blob/v3/node/src/rtpParametersTypes.ts
+import { RtpParameters } from "./rtpParametersTypes";
 
 export type SrtpParameters = {
   cryptoSuite: string;
@@ -8,15 +13,13 @@ export type SrtpParameters = {
 
 type ProduceOptions = {
   ipAddress: string;
+  rtpParameters: RtpParameters;
   rtpPort: number;
   rtcpPort: number;
   srtpParameters?: SrtpParameters;
   onError: (error: Error) => void;
   // sample rate of the pcm audio data that will be passed into the sendAudioData function
   sampleRate: number;
-  ssrc: number;
-  payloadType: number;
-  cname: string;
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
@@ -48,24 +51,55 @@ type ConsumeReturn = {
 };
 
 export function produceRtp(options: ProduceOptions): ProduceReturn {
-  const host = options.ipAddress.includes(":") ? `[${options.ipAddress}]` : options.ipAddress;
-  const rtpUrl = `rtp://${host}:${options.rtpPort}`;
+  const { rtpParameters, srtpParameters } = options;
+
+  const host = options.ipAddress.includes(":")
+    ? `[${options.ipAddress}]`
+    : options.ipAddress;
+
+  const protocol = options.srtpParameters ? "srtp://" : "rtp://";
+  const rtpUrl = `${protocol}${host}:${options.rtpPort}`;
 
   const abortController = new AbortController();
+
+  // TODO: We could probably support disabling rtcp
+  if (rtpParameters.rtcp == null) {
+    throw new Error("rtcp parameters are required");
+  }
+  const cname = rtpParameters.rtcp.cname;
+
+  if (cname == null) {
+    throw new Error("expected cname");
+  }
+
+  if (
+    rtpParameters.codecs.length !== 1 ||
+    rtpParameters.codecs[0].mimeType !== "audio/opus"
+  ) {
+    throw new Error("expected one opus codec");
+  }
+
+  const payloadType = rtpParameters.codecs[0].payloadType;
+
+  if (rtpParameters.encodings == null || rtpParameters.encodings.length !== 1) {
+    throw new Error("expected one encoding");
+  }
+
+  const ssrc = rtpParameters.encodings[0].ssrc;
 
   const { promise, external } = native.startAudioEncodeThread(
     abortController.signal,
     {
       rtpUrl,
-      ssrc: String(options.ssrc),
-      payloadType: String(options.payloadType),
-      cname: options.cname,
+      ssrc: String(ssrc),
+      payloadType: String(payloadType),
+      cname: cname,
       sampleRate: options.sampleRate,
       bitrate: options.opus?.bitrate ?? 0,
       enableFec: options.opus?.enableFec ?? false,
       packetLossPercent: options.opus?.packetLossPercent ?? 0,
-      cryptoSuite: options.srtpParameters?.cryptoSuite,
-      keyBase64: options.srtpParameters?.keyBase64,
+      cryptoSuite: srtpParameters?.cryptoSuite,
+      keyBase64: srtpParameters?.keyBase64,
     },
   );
 
@@ -118,6 +152,145 @@ export function createSrtpParameters(): SrtpParameters {
     cryptoSuite: "AES_CM_128_HMAC_SHA1_80",
     keyBase64: randomBytes(30).toString("base64"),
   };
+}
+
+export function createRtpParameters(): RtpParameters {
+  const cname = randomBytes(8).toString("hex");
+  const list = new Int32Array(1);
+  getRandomValues(list);
+  const ssrc = Math.abs(list[0]);
+
+  // WebRTC uses 111 for Opus
+  const payloadType = 111;
+
+  return {
+    codecs: [
+      {
+        mimeType: "audio/opus",
+        payloadType,
+        clockRate: 48000,
+        channels: 2,
+        parameters: {
+          minptime: 10,
+          useinbandfec: 1,
+        },
+        rtcpFeedback: [],
+      },
+    ],
+    headerExtensions: [],
+    encodings: [{ ssrc }],
+    rtcp: {
+      cname,
+      reducedSize: true,
+    },
+  };
+}
+
+export function createSDP({
+  userName,
+  subject,
+  sessionId,
+  originIpAddress,
+  destinationIpAddress,
+  rtpPort,
+  rtcpPort,
+  rtpParameters,
+  language,
+  srtpParameters,
+}: {
+  userName?: string;
+  subject?: string;
+  sessionId?: string;
+  originIpAddress?: string;
+  destinationIpAddress: string;
+  rtpPort: number;
+  rtcpPort?: number;
+  rtpParameters: RtpParameters;
+  language?: string;
+  srtpParameters?: SrtpParameters;
+}): string {
+  if (originIpAddress == null) {
+    originIpAddress = "127.0.0.1";
+  }
+
+  if (sessionId == null) {
+    sessionId = randomBytes(8).toString("hex");
+  }
+
+  if (subject == null) {
+    subject = "audio-rtp-tools";
+  }
+
+  if (userName == null) {
+    userName = "-";
+  }
+
+  const mediaProtocol = srtpParameters ? "RTP/SAVPF" : "RTP/AVPF";
+
+  const extra: Array<string> = [];
+
+  if (rtcpPort != null) {
+    extra.push(`a=rtcp:${rtcpPort}`);
+  }
+
+  for (const codec of rtpParameters.codecs) {
+    const match = codec.mimeType.match(/(\w+)\/(\w+)/);
+    if (!match) {
+      throw new Error(`Unexpected mimeType: ${codec.mimeType}`);
+    }
+
+    const mediaType = match[1];
+    const codecName = match[2];
+
+    extra.push(
+      `m=${mediaType} ${rtpPort} ${mediaProtocol} ${codec.payloadType}`,
+    );
+    extra.push(
+      `a=rtpmap:${codec.payloadType} ${codecName}/${codec.clockRate}/${codec.channels}`,
+    );
+
+    if (codec.parameters) {
+      const fmtp = sdpParameters(codec.parameters);
+      extra.push(`a=fmtp:${codec.payloadType} ${fmtp}`);
+    }
+  }
+
+  if (rtpParameters.headerExtensions) {
+    for (const ext of rtpParameters.headerExtensions) {
+      let line = `a=extmap:${ext.id} ${ext.uri}`;
+      if (ext.parameters) {
+        line += ` ${sdpParameters(ext.parameters)}`;
+      }
+      extra.push(line);
+    }
+  }
+
+  if (srtpParameters) {
+    extra.push(
+      `a=crypto:1 ${srtpParameters.cryptoSuite} inline:${srtpParameters.keyBase64}`,
+    );
+  }
+
+  if (language) {
+    extra.push(`a=lang:${language}`);
+  }
+
+  const originAddressType = isIPv6(originIpAddress) ? "IP6" : "IP4";
+  const destinationAddressType = isIPv6(destinationIpAddress) ? "IP6" : "IP4";
+
+  return `v=0
+o=${userName} ${sessionId} 0 IN ${originAddressType} ${originIpAddress}
+s=${subject}
+c=IN ${destinationAddressType} ${destinationIpAddress}
+t=0 0
+${extra.join("\n")}
+`;
+}
+
+function sdpParameters(parameters: Record<string, unknown>): string {
+  return Object.entries(parameters)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(";");
 }
 
 export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
