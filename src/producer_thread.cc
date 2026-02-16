@@ -123,11 +123,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadP
           }
         }
 
-        fprintf(
-          stderr,
-          "resetting to wallclock time: old_rebase_pts: %lld, new_rebase_pts: %lld, incoming pts: %lld <= %lld\n",
-          rebase_pts, now_pts, pkt->pts, last_pts
-        );
+        // fprintf(
+        //   stderr,
+        //   "resetting to wallclock time: old_rebase_pts: %lld, new_rebase_pts: %lld, incoming pts: %lld <= %lld\n",
+        //   rebase_pts, now_pts, pkt->pts, last_pts
+        // );
         rebase_pts = now_pts;
         // Reset next_expected_pts so the drop check (below) doesn't compare
         // the new stream's PTS against the old stream's expected PTS.
