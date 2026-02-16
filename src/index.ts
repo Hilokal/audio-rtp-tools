@@ -22,6 +22,15 @@ type ProduceOptions = {
 
   onError?: (error: Error) => void;
 
+  // Called when the encoder's message queue has room after write() returned false.
+  // Use this to implement backpressure: stop writing when write() returns false,
+  // resume when onDrain fires.
+  onDrain?: () => void;
+
+  // Depth of the encoder's message queue. When the queue is full, write() returns
+  // false. Smaller values surface backpressure sooner. Defaults to 1024.
+  queueDepth?: number;
+
   // Use this to enable encryption. This is the result of the createSrtpParameters function.
   srtpParameters?: SrtpParameters;
 
@@ -36,7 +45,9 @@ type ProduceOptions = {
 };
 
 type ProduceReturn = {
-  // Queues up PCM data to be sent
+  // Queues up PCM data to be sent. Returns true if the queue has room for more,
+  // false if the queue is full. When false is returned, stop writing and wait
+  // for the onDrain callback before resuming.
   write: (data: Buffer) => boolean;
 
   // Signal the end of a contiguous audio segment. Flushes any partial frame
@@ -120,6 +131,8 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     packetLossPercent: options.opus?.packetLossPercent ?? 0,
     cryptoSuite: srtpParameters?.cryptoSuite,
     keyBase64: srtpParameters?.keyBase64,
+    onDrain: options.onDrain,
+    queueDepth: options.queueDepth ?? 0,
   });
 
   if (options.onError) {

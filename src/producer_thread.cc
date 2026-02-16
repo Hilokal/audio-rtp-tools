@@ -188,14 +188,14 @@ cleanup:
 // to handle the backpressure.
 #define PRODUCER_MESSAGE_QUEUE_SIZE 8192
 
-static int ThreadMainWithPromise(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const ProducerThreadParams &params) {
+static int ThreadMainWithPromise(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const ProducerThreadParams &params) {
     return ThreadMain(message_queue, params);
 }
 
 napi_status start_producer_thread(napi_env env, ProducerThreadParams &params, napi_value abort_signal, napi_value *external, napi_value *promise) {
   size_t stack_size = get_stack_size_for_thread("PRODUCER");
 
-  napi_status status = start_thread_with_promise_result<ProducerThreadParams>(env, ThreadMainWithPromise, params, abort_signal, NULL, stack_size, PRODUCER_MESSAGE_QUEUE_SIZE, external, NULL, promise);
+  napi_status status = start_thread_with_promise_result<ProducerThreadParams>(env, ThreadMainWithPromise, params, abort_signal, NULL, stack_size, PRODUCER_MESSAGE_QUEUE_SIZE, external, NULL, NULL, promise);
 
   if (status != napi_ok) {
     av_freep(&params.url);
@@ -223,6 +223,7 @@ static void *ThreadMainRawWrapper(void *opaque) {
 
 int start_producer_thread_raw(
   const ProducerThreadParams &params,
+  unsigned int queue_size,
   ProducerThreadData **thread_data
 ) {
   int ret;
@@ -244,7 +245,7 @@ int start_producer_thread_raw(
 
   *thread_data = new ProducerThreadData();
 
-  ret = av_thread_message_queue_alloc(&(*thread_data)->message_queue, PRODUCER_MESSAGE_QUEUE_SIZE, sizeof(ThreadMessage));
+  ret = av_thread_message_queue_alloc(&(*thread_data)->message_queue, queue_size, sizeof(ThreadMessage));
   if (ret != 0) {
     delete *thread_data;
     *thread_data = NULL;

@@ -154,13 +154,15 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 | `onError` | `(error: Error) => void?` | Error callback (optional) |
 | `srtpParameters` | `SrtpParameters?` | SRTP encryption parameters (optional) |
 | `signal` | `AbortSignal?` | Abort signal for immediate shutdown (optional) |
+| `queueDepth` | `number?` | Encoder message queue depth (default 1024). Set this large enough for your use case to avoid drops |
+| `onDrain` | `() => void?` | Called when the queue has room after `write()` returned `false`. For advanced backpressure handling (optional) |
 | `opus.bitrate` | `number \| null?` | Opus encoder bitrate in bps, or `null` for auto |
 | `opus.enableFec` | `boolean?` | Enable forward error correction |
 | `opus.packetLossPercent` | `number?` | Expected packet loss percentage (helps FEC) |
 
 **Returns** an object with:
 
-- **`write(data: Buffer): boolean`** — Queue PCM data for encoding. Data should be 16-bit signed mono PCM at the sample rate specified in options.
+- **`write(data: Buffer): boolean`** — Queue PCM data for encoding. Data should be 16-bit signed mono PCM at the sample rate specified in options. Returns `false` when the queue is full — stop writing and wait for `onDrain` before resuming.
 - **`endSegment(): void`** — Signal the end of a contiguous audio segment. Flushes any partial frame and resets timing so the next `write()` starts a fresh segment with timestamps rebased to wall-clock time. Call this between distinct stretches of audio (e.g. between AI model turns).
 - **`end(): void`** — Signal end of stream. The thread will finish sending queued data before shutting down.
 - **`done(): Promise<void>`** — Resolves when the thread has exited.

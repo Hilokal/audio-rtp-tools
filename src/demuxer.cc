@@ -541,7 +541,7 @@ cleanup:
   }
 }
 
-int ThreadMainFile(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const DemuxerThreadData &params) {
+int ThreadMainFile(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const DemuxerThreadData &params) {
   DemuxerThreadData params2(params);
   params2.input_message_queue = message_queue;
   return ThreadMain(&params2);
@@ -627,6 +627,7 @@ napi_status start_file_demuxer(napi_env env, napi_value js_output_message_queue,
     stack_size,
     FILE_DEMUXER_MESSAGE_QUEUE_SIZE,
     external,
+    NULL,
     NULL,
     promise
   );

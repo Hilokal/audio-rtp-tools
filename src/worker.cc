@@ -20,6 +20,7 @@ extern "C" {
 #include "thread_messages.h"
 #include "audio_decode_thread.h"
 #include "audio_encode_thread.h"
+#include "thread_with_promise_result.h"
 #define SDP_MAX_SIZE 2046
 
 namespace hilokal {
@@ -549,6 +550,27 @@ namespace hilokal {
     status = get_option_int32(env, args[1], "sampleRate", &params.sampleRate);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
+    // Extract optional queueDepth (defaults to DEFAULT_MESSAGE_QUEUE_SIZE)
+    int32_t queue_depth_i32 = 0;
+    unsigned int queue_depth = DEFAULT_MESSAGE_QUEUE_SIZE;
+    if (get_option_int32(env, args[1], "queueDepth", &queue_depth_i32) == napi_ok && queue_depth_i32 > 0) {
+      queue_depth = (unsigned int)queue_depth_i32;
+    }
+
+    // Extract optional onDrain callback
+    napi_value on_drain_callback = NULL;
+    {
+      napi_value js_key;
+      napi_value prop_value;
+      napi_create_string_utf8(env, "onDrain", NAPI_AUTO_LENGTH, &js_key);
+      napi_get_property(env, args[1], js_key, &prop_value);
+      napi_valuetype prop_type;
+      napi_typeof(env, prop_value, &prop_type);
+      if (prop_type == napi_function) {
+        on_drain_callback = prop_value;
+      }
+    }
+
     if (status != napi_ok) {
         av_freep(&params.rtpUrl);
         av_freep(&params.ssrc);
@@ -563,7 +585,7 @@ namespace hilokal {
     napi_value external;
     napi_value promise;
 
-    status = start_audio_encode_thread(env, params, abort_signal, &external, &promise);
+    status = start_audio_encode_thread(env, params, abort_signal, on_drain_callback, queue_depth, &external, &promise);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = napi_create_object(env, &ret);
@@ -636,8 +658,6 @@ namespace hilokal {
       return NULL;
     }
 
-    // TODO: I don't understand why we are returning a bool here, rather than throwing an exception.
-    // I think this might be a hallucination. Or.. maybe we need to return false to indicate the message queue is full
     bool success = true;
 
     if (buffer_length > 0) {

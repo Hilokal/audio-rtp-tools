@@ -19,6 +19,8 @@ napi_status start_audio_encode_thread(
   napi_env env,
   const AudioEncodeThreadParams &params,
   napi_value abort_signal,
-  napi_value *external,  // Returns message queue for posting PCM
+  napi_value on_drain_callback,  // Optional JS callback invoked when queue has room
+  unsigned int queue_depth,       // Message queue depth
+  napi_value *external,           // Returns message queue for posting PCM
   napi_value *promise
 );

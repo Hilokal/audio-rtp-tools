@@ -23,8 +23,9 @@ extern "C" {
 // Max 20ms frame at 48kHz input
 #define MAX_FRAME_SIZE_INPUT 960
 
-// Producer queue size - needs to buffer during pacing
-#define PRODUCER_QUEUE_SIZE 4096
+// Producer queue size - just needs to absorb burst from encoding while the
+// producer paces at real-time. Small so that backpressure surfaces promptly.
+#define PRODUCER_QUEUE_SIZE 256
 
 // Copied from libavcodec/libopus.c
 static int ff_opus_error_to_averror(int err) {
@@ -48,7 +49,7 @@ static int ff_opus_error_to_averror(int err) {
   }
 }
 
-static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const AudioEncodeThreadParams &params) {
+static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const AudioEncodeThreadParams &params) {
   set_thread_name("audio_encode_thread");
 
   const int input_sample_rate = params.sampleRate;
@@ -81,7 +82,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
     producer_params.cryptoSuite = params.cryptoSuite;
     producer_params.keyBase64 = params.keyBase64;
 
-    ret = start_producer_thread_raw(producer_params, &producer_thread);
+    ret = start_producer_thread_raw(producer_params, PRODUCER_QUEUE_SIZE, &producer_thread);
     if (ret != 0) {
       fprintf(stderr, "audio_encode_thread: failed to start producer thread [%d]\n", ret);
       goto cleanup;
@@ -122,6 +123,10 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         ret = 0;
       }
       goto cleanup;
+    }
+
+    if (drain_async != NULL) {
+      uv_async_send(drain_async);
     }
 
     if (thread_message.type == POST_PCM_BUFFER) {
@@ -179,12 +184,10 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           pkt->dts = pts;
           pkt->duration = FRAME_SIZE_OUTPUT;  // 960 at 48kHz = 20ms
 
-          // Post to producer thread
-          int post_ret = post_packet_to_thread(producer_thread->message_queue, pkt, AV_THREAD_MESSAGE_NONBLOCK);
-          if (post_ret != 0) {
-            if (post_ret == AVERROR(EAGAIN)) {
-              fprintf(stderr, "audio_encode_thread: WARNING producer queue full, dropping packet\n");
-            }
+          // Post to producer thread (blocking — safe since we're on a dedicated pthread)
+          int post_ret = post_packet_to_thread(producer_thread->message_queue, pkt, 0);
+          if (post_ret < 0) {
+            fprintf(stderr, "audio_encode_thread: post_packet_to_thread failed [%d]\n", post_ret);
           }
 
           av_packet_free(&pkt);
@@ -220,7 +223,10 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
             pkt->dts = pts;
             pkt->duration = FRAME_SIZE_OUTPUT;
 
-            post_packet_to_thread(producer_thread->message_queue, pkt, AV_THREAD_MESSAGE_NONBLOCK);
+            int post_ret = post_packet_to_thread(producer_thread->message_queue, pkt, 0);
+            if (post_ret < 0) {
+              fprintf(stderr, "audio_encode_thread: flush post_packet_to_thread failed [%d]\n", post_ret);
+            }
           }
           if (pkt != NULL) {
             av_packet_free(&pkt);
@@ -279,6 +285,8 @@ napi_status start_audio_encode_thread(
   napi_env env,
   const AudioEncodeThreadParams &params,
   napi_value abort_signal,
+  napi_value on_drain_callback,
+  unsigned int queue_depth,
   napi_value *external,
   napi_value *promise
 ) {
@@ -291,9 +299,10 @@ napi_status start_audio_encode_thread(
     abort_signal,
     NULL,
     stack_size,
-    DEFAULT_MESSAGE_QUEUE_SIZE,
+    queue_depth,
     external,
     NULL,
+    on_drain_callback,
     promise
   );
 }

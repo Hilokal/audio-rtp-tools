@@ -46,7 +46,7 @@ static size_t secondsToPacketCount(double seconds) {
 }
 
 
-static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const AudioDecodeThreadParams &thread_data) {
+static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const AudioDecodeThreadParams &thread_data) {
   int thread_ret = 0;
   int demux_ret = 0;
 
@@ -252,5 +252,5 @@ cleanup_thread:
 napi_status start_audio_decode_thread(napi_env env, const AudioDecodeThreadParams &params, napi_value abort_signal, napi_value on_audio_callback, napi_value *external, napi_value *promise) {
   size_t stack_size = get_stack_size_for_thread("MUXER");
 
-  return start_thread_with_promise_result<AudioDecodeThreadParams>(env, ThreadMain, params, abort_signal, NULL, stack_size, DEFAULT_MESSAGE_QUEUE_SIZE, external, on_audio_callback, promise);
+  return start_thread_with_promise_result<AudioDecodeThreadParams>(env, ThreadMain, params, abort_signal, NULL, stack_size, DEFAULT_MESSAGE_QUEUE_SIZE, external, on_audio_callback, NULL, promise);
 }

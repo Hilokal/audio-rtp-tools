@@ -6,6 +6,36 @@
 #include "node_errors.h"
 #include "buffer_ready_node_callback.h"
 
+struct DrainCallback {
+  napi_env env;
+  napi_ref callback_ref;
+};
+
+static void drain_async_callback(uv_async_t *async) {
+  DrainCallback *data = (DrainCallback *)async->data;
+  napi_handle_scope scope;
+  napi_status status = napi_open_handle_scope(data->env, &scope);
+  if (status != napi_ok) {
+    fprintf(stderr, "drain_async_callback: napi_open_handle_scope failed [%d]\n", status);
+    return;
+  }
+
+  napi_value callback, global, result;
+  napi_get_reference_value(data->env, data->callback_ref, &callback);
+  napi_get_global(data->env, &global);
+  napi_call_function(data->env, global, callback, 0, NULL, &result);
+
+  napi_close_handle_scope(data->env, scope);
+}
+
+static void drain_close_callback(uv_handle_t *handle) {
+  DrainCallback *data = (DrainCallback *)handle->data;
+  napi_delete_reference(data->env, data->callback_ref);
+  uv_async_t *async = (uv_async_t *)handle;
+  delete data;
+  delete async;
+}
+
 template<class THREAD_PARAMS>
 class ThreadData {
   public:
@@ -25,12 +55,13 @@ class ThreadData {
 
   uv_async_t thread_finished_async;
   uv_async_t *buffer_ready_async;
+  uv_async_t *drain_async;
 
   napi_env env;
   napi_deferred deferred;
   int thread_ret;
 
-  int (*thread_main)(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const THREAD_PARAMS &params);
+  int (*thread_main)(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const THREAD_PARAMS &params);
 
   ~ThreadData() {
     napi_delete_reference(env, message_queue_ref);
@@ -170,6 +201,11 @@ static void async_callback(uv_async_t *async) {
     cleanup_callback_for_many(thread_data->buffer_ready_async);
   }
 
+  if (thread_data->drain_async != NULL) {
+    uv_close((uv_handle_t *)thread_data->drain_async, drain_close_callback);
+    thread_data->drain_async = NULL;
+  }
+
   napi_value js_value;
   status = napi_create_int32(env, thread_data->thread_ret, &js_value);
   if (status != napi_ok) {
@@ -198,7 +234,7 @@ template<class THREAD_PARAMS>
 void *ThreadMain(void *opaque) {
   ThreadData<THREAD_PARAMS>* thread_data = (ThreadData<THREAD_PARAMS>*)opaque;
 
-  int ret = thread_data->thread_main(thread_data->message_queue, thread_data->buffer_ready_async, thread_data->params);
+  int ret = thread_data->thread_main(thread_data->message_queue, thread_data->buffer_ready_async, thread_data->drain_async, thread_data->params);
   thread_data->thread_ret = ret;
 
   av_thread_message_queue_set_err_send(thread_data->message_queue, AVERROR_EOF);
@@ -219,7 +255,7 @@ static void finalize(napi_env env, void* finalize_data, void* finalize_hint) {
 template<class THREAD_PARAMS>
 napi_status start_thread_with_promise_result(
     napi_env env,
-    int (*thread_main)(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, const THREAD_PARAMS &params),
+    int (*thread_main)(AVThreadMessageQueue *message_queue, uv_async_t *buffer_ready_async, uv_async_t *drain_async, const THREAD_PARAMS &params),
     const THREAD_PARAMS &params,
     napi_value abort_signal,
     napi_value js_input_value,
@@ -227,6 +263,7 @@ napi_status start_thread_with_promise_result(
     unsigned int message_queue_size,
     napi_value *external,
     napi_value on_buffer_ready_callback,
+    napi_value on_drain_callback,
     napi_value *promise) {
 
   napi_status status;
@@ -295,6 +332,31 @@ napi_status start_thread_with_promise_result(
       delete thread_data;
       return status;
     }
+  }
+
+  if (on_drain_callback == NULL) {
+    thread_data->drain_async = NULL;
+  } else {
+    DrainCallback *drain_data = new DrainCallback();
+    drain_data->env = env;
+
+    status = napi_create_reference(env, on_drain_callback, 1, &drain_data->callback_ref);
+    if (status != napi_ok) {
+      delete drain_data;
+      delete thread_data;
+      return status;
+    }
+
+    thread_data->drain_async = new uv_async_t();
+    ret = uv_async_init(uv_default_loop(), thread_data->drain_async, drain_async_callback);
+    if (ret != 0) {
+      napi_delete_reference(env, drain_data->callback_ref);
+      delete drain_data;
+      delete thread_data->drain_async;
+      delete thread_data;
+      return napi_throw_error(env, NULL, "uv_async_init failed for drain");
+    }
+    thread_data->drain_async->data = drain_data;
   }
 
   //

@@ -35,6 +35,7 @@ struct ProducerThreadData {
 // Raw pthread API for use from encoder thread
 int start_producer_thread_raw(
   const ProducerThreadParams &params,
+  unsigned int queue_size,
   ProducerThreadData **thread_data
 );
 
