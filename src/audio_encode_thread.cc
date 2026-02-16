@@ -237,16 +237,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       }
       pts = 0;
     } else if (thread_message.type == CLEAR_PRODUCER_QUEUE) {
-      // Drain the producer thread's packet queue
       if (producer_thread != NULL) {
-        ThreadMessage producer_msg;
-        while (true) {
-          int drain_ret = av_thread_message_queue_recv(producer_thread->message_queue, &producer_msg, AV_THREAD_MESSAGE_NONBLOCK);
-          if (drain_ret < 0) {
-            break;
-          }
-          thread_message_free_func(&producer_msg);
-        }
+        av_thread_message_flush(producer_thread->message_queue);
       }
     } else if (thread_message.type == SET_ENCODER_BITRATE) {
       opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(

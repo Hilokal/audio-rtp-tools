@@ -277,19 +277,7 @@ namespace hilokal {
       return NULL;
     }
 
-    ThreadMessage thread_message;
-
-    while (true) {
-      int ret = av_thread_message_queue_recv(message_queue, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
-      if (ret < 0) {
-        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-          fprintf(stderr, "clearMessageQueue: av_thread_message_queue_recv() returned error [%d]\n", ret);
-        }
-        break;
-      } else {
-        thread_message_free_func(&thread_message);
-      }
-    }
+    av_thread_message_flush(message_queue);
 
     return NULL;
   }
