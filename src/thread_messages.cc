@@ -88,9 +88,6 @@ int post_pcm_buffer_to_thread(AVThreadMessageQueue *message_queue, void *buffer,
   int ret = av_thread_message_queue_send(message_queue, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 
   if (ret != 0) {
-    if (ret == AVERROR(EAGAIN)) {
-      fprintf(stderr, "WARNING: Dropping PCM buffer because encoder queue full [%p]\n", message_queue);
-    }
     av_buffer_unref(&buffer_ref);
   }
 
