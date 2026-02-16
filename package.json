@@ -1,6 +1,6 @@
 {
   "name": "audio-rtp-tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "dist/index.js",
   "files": ["dist", "binding.gyp", "src/*.cc", "src/*.h"],
   "gypfile": true,
