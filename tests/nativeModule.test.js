@@ -18,7 +18,12 @@ const encodeSampleRate = 24000;
 // Decode at a different sample rate.
 const decodeSampleRate = 16000;
 
-async function runProducer({ rtpParameters, srtpParameters, signal, queueDepth }) {
+async function runProducer({
+  rtpParameters,
+  srtpParameters,
+  signal,
+  queueDepth,
+}) {
   let resolveDrain;
   let drainCount = 0;
 
@@ -65,7 +70,9 @@ async function runProducer({ rtpParameters, srtpParameters, signal, queueDepth }
     );
     // When write() returns false, the data was dropped. Wait for drain and retry.
     while (!producer.write(chunk)) {
-      await new Promise((resolve) => { resolveDrain = resolve; });
+      await new Promise((resolve) => {
+        resolveDrain = resolve;
+      });
     }
   }
   producer.end();
@@ -109,9 +116,12 @@ it(
     });
 
     let buffersReceived = 0;
+    // Play with: ffplay -f s16le -ar 16000 -ch_layout mono tests/decoded_output.pcm
+    const pcmPath = path.join(__dirname, "decoded_output.pcm");
+    const pcmStream = fs.createWriteStream(pcmPath);
     function onAudioData({ buffer, pts }) {
-      //console.log("got packet", pts);
       expect(buffer.byteLength).toBeGreaterThan(0);
+      pcmStream.write(buffer);
       buffersReceived++;
     }
 
@@ -146,6 +156,8 @@ it(
     abortController.abort();
 
     await consumerDone();
+
+    pcmStream.end();
 
     // This will usually be 420
     expect(buffersReceived).toBeGreaterThan(410);
