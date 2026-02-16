@@ -18,7 +18,10 @@ const encodeSampleRate = 24000;
 // Decode at a different sample rate.
 const decodeSampleRate = 16000;
 
-function runProducer({ rtpParameters, srtpParameters, signal }) {
+async function runProducer({ rtpParameters, srtpParameters, signal, queueDepth }) {
+  let resolveDrain;
+  let drainCount = 0;
+
   const producer = produceRtp({
     ipAddress: "127.0.0.1",
     rtpPort: RTP_PORT,
@@ -29,12 +32,20 @@ function runProducer({ rtpParameters, srtpParameters, signal }) {
     onError: (error) => {
       console.log("producer error callback", error);
     },
+    onDrain: () => {
+      drainCount++;
+      if (resolveDrain) {
+        resolveDrain();
+        resolveDrain = undefined;
+      }
+    },
     sampleRate: encodeSampleRate,
     opus: {
       bitrate: null,
       enableFec: true,
       packetLossPercent: 10,
     },
+    queueDepth,
   });
 
   // LJ025-0076.wav from https://keithito.com/LJ-Speech-Dataset/
@@ -52,11 +63,14 @@ function runProducer({ rtpParameters, srtpParameters, signal }) {
       offset,
       Math.min(offset + chunkSize, pcmData.length),
     );
-    producer.write(chunk);
+    // When write() returns false, the data was dropped. Wait for drain and retry.
+    while (!producer.write(chunk)) {
+      await new Promise((resolve) => { resolveDrain = resolve; });
+    }
   }
   producer.end();
 
-  return { done: producer.done };
+  return { done: producer.done, drainCount };
 }
 
 it("aborts a producer thread", async () => {
@@ -65,7 +79,7 @@ it("aborts a producer thread", async () => {
 
   const abortController = new AbortController();
 
-  const { done } = runProducer({
+  const { done } = await runProducer({
     rtpParameters,
     srtpParameters,
     signal: abortController.signal,
@@ -113,12 +127,17 @@ it(
       signal: abortController.signal,
     });
 
-    // Start the producer after the decoder is listening
-    const { done: producerDone } = runProducer({
+    // Start the producer after the decoder is listening.
+    // Use an absurdly small queue to test backpressure handling.
+    const { done: producerDone, drainCount } = await runProducer({
       rtpParameters,
       srtpParameters,
       signal: abortController.signal,
+      queueDepth: 4,
     });
+
+    // With queueDepth: 4 and a full WAV file, drain should have fired many times
+    expect(drainCount).toBeGreaterThan(0);
 
     // Wait for the producer to finish streaming audio. Should take less than 10 seconds
     await producerDone();
