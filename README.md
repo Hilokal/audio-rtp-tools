@@ -162,7 +162,7 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 
 **Returns** an object with:
 
-- **`write(data: Buffer): boolean`** — Queue PCM data for encoding. Data should be 16-bit signed mono PCM at the sample rate specified in options. Returns `false` if the queue is full (see [Backpressure](#backpressure)).
+- **`write(data: Buffer): boolean`** — Queue PCM data for encoding. Data should be 16-bit signed mono PCM at the sample rate specified in options. Returns `false` if the queue was full and the data was dropped (see [Backpressure](#backpressure)).
 - **`endSegment(): void`** — Signal the end of a contiguous audio segment. Flushes any partial frame and resets timing so the next `write()` starts a fresh segment with timestamps rebased to wall-clock time. Call this between distinct stretches of audio (e.g. between AI model turns).
 - **`end(): void`** — Signal end of stream. The thread will finish sending queued data before shutting down.
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
@@ -242,7 +242,7 @@ Communication between JavaScript and native threads uses FFmpeg's `AVThreadMessa
 
 The producer thread sends RTP packets at real-time speed, so if your source generates audio faster than real-time (common with AI models that stream in bursts), data queues up internally. The default queue depth of 8192 can absorb roughly 2–3 minutes of audio ahead of real-time playback (assuming typical 20ms writes) — more than enough for typical AI streaming use cases. You can call `write()` without checking its return value and everything will work fine.
 
-For advanced scenarios where you need explicit flow control, `write()` returns a boolean: `true` means the queue accepted the data, `false` means the queue is full and the data was dropped. You can pass an `onDrain` callback in the options to be notified when the queue has room again, and a `queueDepth` to control how deep the queue is. This follows the same convention as Node.js writable streams.
+For advanced scenarios where you need explicit flow control, `write()` returns a boolean: `true` means the queue accepted the data, `false` means the queue was full and the data was dropped. You can pass an `onDrain` callback to be notified when the queue has room again, and a `queueDepth` to control how deep the queue is. Note that unlike Node.js writable streams, data is not buffered when `write()` returns `false` — it is discarded, so the caller must retry if the data is important.
 
 ## Building from source
 

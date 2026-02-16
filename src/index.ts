@@ -45,9 +45,9 @@ type ProduceOptions = {
 };
 
 type ProduceReturn = {
-  // Queues up PCM data to be sent. Returns true if the queue has room for more,
-  // false if the queue is full. When false is returned, stop writing and wait
-  // for the onDrain callback before resuming.
+  // Queues up PCM data to be sent. Returns true if the data was accepted, false
+  // if the queue was full and the data was dropped. When false is returned, wait
+  // for the onDrain callback and retry.
   write: (data: Buffer) => boolean;
 
   // Signal the end of a contiguous audio segment. Flushes any partial frame
