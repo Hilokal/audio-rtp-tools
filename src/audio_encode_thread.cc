@@ -23,8 +23,8 @@ extern "C" {
 // Max 20ms frame at 48kHz input
 #define MAX_FRAME_SIZE_INPUT 960
 
-// Producer queue size - just needs to absorb burst from encoding while the
-// producer paces at real-time. Small so that backpressure surfaces promptly.
+// Producer queue size — small since the encoder blocks on it. Backpressure
+// is controlled by the encoder queue (queueDepth), not this.
 #define PRODUCER_QUEUE_SIZE 256
 
 // Copied from libavcodec/libopus.c

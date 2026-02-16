@@ -550,9 +550,9 @@ namespace hilokal {
     status = get_option_int32(env, args[1], "sampleRate", &params.sampleRate);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
-    // Extract optional queueDepth (defaults to DEFAULT_MESSAGE_QUEUE_SIZE)
+    // Extract optional queueDepth (defaults to 8192)
     int32_t queue_depth_i32 = 0;
-    unsigned int queue_depth = DEFAULT_MESSAGE_QUEUE_SIZE;
+    unsigned int queue_depth = 8192;
     if (get_option_int32(env, args[1], "queueDepth", &queue_depth_i32) == napi_ok && queue_depth_i32 > 0) {
       queue_depth = (unsigned int)queue_depth_i32;
     }

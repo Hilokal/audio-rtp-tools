@@ -28,7 +28,7 @@ type ProduceOptions = {
   onDrain?: () => void;
 
   // Depth of the encoder's message queue. When the queue is full, write() returns
-  // false. Smaller values surface backpressure sooner. Defaults to 1024.
+  // false. Smaller values surface backpressure sooner. Defaults to 8192.
   queueDepth?: number;
 
   // Use this to enable encryption. This is the result of the createSrtpParameters function.
