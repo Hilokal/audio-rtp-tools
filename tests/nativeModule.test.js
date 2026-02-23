@@ -9,6 +9,7 @@ const {
 const { exec } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { randomInt } = require("crypto");
 
 const RTP_PORT = 9004;
 
@@ -61,13 +62,25 @@ async function runProducer({
   const fileBuffer = fs.readFileSync(sourceAudio);
   const pcmData = fileBuffer.subarray(44); // skip WAV header
 
-  // Send PCM data in chunks: 480 samples * 2 bytes = 960 bytes per 20ms frame
-  const chunkSize = 960;
-  for (let offset = 0; offset < pcmData.length; offset += chunkSize) {
+  // The audio_encode_thread has an accumulator that buffers PCM data until
+  // it's big enough to fill an opus frame. We use random input buffers to exercise
+  // this logic.
+  const chunkRange = [10, 960];
+  let chunkSize = randomInt(...chunkRange);
+
+  for (let offset = 0; offset < pcmData.length; ) {
     const chunk = pcmData.subarray(
       offset,
       Math.min(offset + chunkSize, pcmData.length),
     );
+
+    // NOTE: I've noticed that adding a console.log line will slow down tests enough
+    // to trigger the jest timeout.
+    console.log(`Writing ${chunk.length} bytes`);
+
+    offset += chunkSize;
+    chunkSize = randomInt(...chunkRange);
+
     // When write() returns false, the data was dropped. Wait for drain and retry.
     while (!producer.write(chunk)) {
       await new Promise((resolve) => {
