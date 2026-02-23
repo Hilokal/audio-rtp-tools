@@ -61,10 +61,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
   // Opus encoder state
   OpusEncoder *opus_encoder = NULL;
-  int16_t mono_accum[MAX_FRAME_SIZE_INPUT];
+  alignas(int16_t) uint8_t mono_accum[MAX_FRAME_SIZE_INPUT * sizeof(int16_t)];
   int16_t stereo_frame[MAX_FRAME_SIZE_INPUT * CHANNELS];
   uint8_t opus_data[MAX_OPUS_FRAME_SIZE];
-  int accum_pos = 0;
+  int accum_pos = 0;  // bytes accumulated
+  const int frame_bytes = frame_size_input * sizeof(int16_t);
   int64_t pts = 0;
 
   int64_t total_samples_encoded = 0;
@@ -130,27 +131,28 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
     }
 
     if (thread_message.type == POST_PCM_BUFFER) {
-      int16_t *input = (int16_t *)thread_message.param.buf->data;
-      int remaining = thread_message.param.buf->size / sizeof(int16_t);
+      uint8_t *input = (uint8_t *)thread_message.param.buf->data;
+      int remaining = thread_message.param.buf->size;
 
       while (remaining > 0) {
-        // Copy mono samples to accumulator
+        // Copy bytes to accumulator
         int to_copy = remaining;
-        if (to_copy > frame_size_input - accum_pos) {
-          to_copy = frame_size_input - accum_pos;
+        if (to_copy > frame_bytes - accum_pos) {
+          to_copy = frame_bytes - accum_pos;
         }
 
-        memcpy(mono_accum + accum_pos, input, to_copy * sizeof(int16_t));
+        memcpy(mono_accum + accum_pos, input, to_copy);
         accum_pos += to_copy;
         input += to_copy;
         remaining -= to_copy;
 
         // When we have a full frame, encode it
-        if (accum_pos >= frame_size_input) {
+        if (accum_pos >= frame_bytes) {
           // Convert mono to stereo (duplicate each sample)
+          int16_t *mono_samples = (int16_t *)mono_accum;
           for (int i = 0; i < frame_size_input; i++) {
-            stereo_frame[i * 2] = mono_accum[i];      // Left
-            stereo_frame[i * 2 + 1] = mono_accum[i];  // Right
+            stereo_frame[i * 2] = mono_samples[i];      // Left
+            stereo_frame[i * 2 + 1] = mono_samples[i];  // Right
           }
 
           // Encode stereo frame (480 samples at 24kHz)
@@ -205,12 +207,13 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       // Encode any remaining accumulated PCM with zero-padding
       if (accum_pos > 0) {
         // Zero-pad the rest of the frame
-        memset(mono_accum + accum_pos, 0, (frame_size_input - accum_pos) * sizeof(int16_t));
+        memset(mono_accum + accum_pos, 0, frame_bytes - accum_pos);
 
         // Convert mono to stereo (duplicate each sample)
+        int16_t *mono_samples = (int16_t *)mono_accum;
         for (int i = 0; i < frame_size_input; i++) {
-          stereo_frame[i * 2] = mono_accum[i];
-          stereo_frame[i * 2 + 1] = mono_accum[i];
+          stereo_frame[i * 2] = mono_samples[i];
+          stereo_frame[i * 2 + 1] = mono_samples[i];
         }
 
         int encoded_len = opus_encode(opus_encoder, stereo_frame, frame_size_input, opus_data, MAX_OPUS_FRAME_SIZE);
