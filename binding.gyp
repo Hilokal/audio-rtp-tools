@@ -13,7 +13,8 @@
         "src/util.cc",
         "src/time_util.cc",
         "src/audio_decode_thread.cc",
-        "src/audio_encode_thread.cc"
+        "src/audio_encode_thread.cc",
+        "src/save_audio_thread.cc"
       ],
       "link_settings": {
         "ldflags": [

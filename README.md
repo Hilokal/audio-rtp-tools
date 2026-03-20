@@ -136,6 +136,48 @@ await consumer.done();
 
 ```
 
+### Recording audio from RTP
+
+```js
+const {
+  saveAudio,
+  createSDP,
+} = require("audio-rtp-tools");
+
+const rtpPort = 10000;
+const rtcpPort = 10001;
+const ipAddress = "127.0.0.1";
+
+// This is a signalling function you write
+const { rtpParameters, srtpParameters } = await sendToProducingPeer({ rtpPort, rtcpPort, ipAddress });
+
+const sdp = createSDP({
+  destinationIpAddress: ipAddress,
+  rtpPort,
+  rtcpPort,
+  rtpParameters,
+  srtpParameters,
+});
+
+const abortController = new AbortController();
+
+// Use .webm — it's the recommended format because it supports
+// Opus natively and correctly preserves timestamp gaps (silence
+// from muted speakers). Other containers like MP4 or OGG may
+// collapse gaps or produce incorrect durations.
+const saver = saveAudio({
+  sdp,
+  outputPath: "/tmp/recording.webm",
+  signal: abortController.signal,
+  onError: (err) => console.error(err),
+});
+
+// Called when you want to stop recording.
+abortController.abort();
+await saver.done();
+// /tmp/recording.webm is now a valid, playable file.
+```
+
 ## API
 
 ### `produceRtp(options): ProduceReturn`
@@ -188,6 +230,25 @@ Receives an RTP Opus stream and decodes it to PCM.
 
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
 
+### `saveAudio(options): SaveAudioReturn`
+
+Records an RTP Opus stream directly to a file. Opus packets are muxed into the output container without decoding, so CPU usage is negligible.
+
+The recommended output format is **WebM** (`.webm`). WebM supports Opus natively and correctly preserves timestamp gaps, so periods of silence (e.g. a muted speaker) appear as silence in the output file with accurate duration. Other containers like MP4 or OGG may collapse gaps or produce incorrect durations.
+
+**Options**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `sdp` | `string` | SDP describing the RTP stream to receive |
+| `outputPath` | `string` | Path to write the output file (e.g. `/tmp/recording.webm`) |
+| `signal` | `AbortSignal` | Abort signal to stop recording and finalize the file |
+| `onError` | `(error: Error) => void?` | Error callback (optional) |
+
+**Returns** an object with:
+
+- **`done(): Promise<void>`** — Resolves when the file has been finalized and the thread has exited.
+
 ### `createRtpParameters(): RtpParameters`
 
 Creates a default set of RTP parameters for Opus audio with a random SSRC and CNAME. Uses payload type 111 (the WebRTC convention for Opus), 48kHz clock rate, stereo, with FEC enabled.
@@ -235,6 +296,7 @@ All audio processing runs on native pthreads, completely off the Node.js event l
 - **Producer thread**: Receives `AVPacket`s from the encoder and muxes them into an RTP/SRTP output stream using FFmpeg's libavformat.
 - **Encoder thread**: Accumulates PCM into 20ms frames, converts mono to stereo, encodes with libopus, and passes packets to the producer thread.
 - **Decoder thread**: Receives RTP via SDP, decodes Opus to PCM with libopus, resamples to the requested output sample rate, and delivers audio buffers back to JavaScript via a `uv_async_t` callback.
+- **Save audio thread**: Receives RTP via SDP and muxes the Opus packets directly into a container file (WebM) without decoding. Uses the same demuxer as the decoder thread, with a custom `interrupt_callback` that only fires on shutdown — so muted speakers don't kill the recording.
 
 Communication between JavaScript and native threads uses FFmpeg's `AVThreadMessageQueue`. Lifecycle is managed through `AbortController` — aborting sends `AVERROR_EOF` on the message queue, which causes the thread to exit cleanly and resolve its JavaScript promise.
 

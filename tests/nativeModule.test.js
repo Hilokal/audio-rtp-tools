@@ -1,6 +1,7 @@
 const {
   produceRtp,
   consumeRtp,
+  saveAudio,
   createSrtpParameters,
   createRtpParameters,
   createSDP,
@@ -176,6 +177,108 @@ it(
     expect(buffersReceived).toBeGreaterThan(410);
   },
   10 * 1000,
+);
+
+it(
+  "saves RTP audio to a webm file via saveAudio",
+  async () => {
+    const SAVE_RTP_PORT = 9010;
+    const rtpParameters = createRtpParameters();
+    const srtpParameters = createSrtpParameters();
+
+    const sdp = createSDP({
+      subject: "Save Audio Test",
+      rtpParameters,
+      originIpAddress: "127.0.0.1",
+      destinationIpAddress: "127.0.0.1",
+      rtpPort: SAVE_RTP_PORT,
+      rtcpPort: SAVE_RTP_PORT + 1,
+      language: "en",
+      srtpParameters,
+    });
+
+    const outputPath = path.join(__dirname, "save_audio_output.webm");
+
+    // Clean up any previous output
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+
+    const abortController = new AbortController();
+
+    const saver = saveAudio({
+      sdp,
+      outputPath,
+      signal: abortController.signal,
+      onError: (error) => {
+        console.log("saveAudio error", error);
+      },
+    });
+
+    // Start the producer to stream audio to the same port
+    const producer = produceRtp({
+      ipAddress: "127.0.0.1",
+      rtpPort: SAVE_RTP_PORT,
+      rtcpPort: SAVE_RTP_PORT + 1,
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+      onError: (error) => {
+        console.log("producer error", error);
+      },
+      sampleRate: encodeSampleRate,
+    });
+
+    const sourceAudio = path.join(__dirname, "LJ025-0076_24k_mono.wav");
+    const fileBuffer = fs.readFileSync(sourceAudio);
+    const pcmData = fileBuffer.subarray(44);
+
+    const chunkSize = 960;
+    for (let offset = 0; offset < pcmData.length; offset += chunkSize) {
+      const chunk = pcmData.subarray(
+        offset,
+        Math.min(offset + chunkSize, pcmData.length),
+      );
+      producer.write(chunk);
+    }
+    producer.end();
+
+    // Wait for the producer to finish streaming
+    await producer.done();
+
+    // Give saveAudio a moment to receive the last packets
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Signal saveAudio to stop and flush the file
+    abortController.abort();
+    await saver.done();
+
+    // Verify the file exists and has content
+    expect(fs.existsSync(outputPath)).toBe(true);
+    const stats = fs.statSync(outputPath);
+    expect(stats.size).toBeGreaterThan(1000);
+
+    // Verify duration with ffprobe
+    const duration = await new Promise((resolve, reject) => {
+      exec(
+        `ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${outputPath}"`,
+        (error, stdout) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(parseFloat(stdout.trim()));
+          }
+        },
+      );
+    });
+
+    console.log(`saveAudio output duration: ${duration}s`);
+
+    // The source WAV is ~8.4s. Allow some tolerance for RTP timing.
+    expect(duration).toBeGreaterThan(5);
+    expect(duration).toBeLessThan(15);
+  },
+  15 * 1000,
 );
 
 afterAll(() => {

@@ -368,6 +368,32 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
   return { done };
 }
 
+type SaveAudioOptions = {
+  sdp: string;
+  outputPath: string;
+  signal: AbortSignal;
+  onError?: (error: Error) => void;
+};
+
+type SaveAudioReturn = {
+  done: () => Promise<void>;
+};
+
+export function saveAudio(options: SaveAudioOptions): SaveAudioReturn {
+  const { promise } = native.startSaveAudioThread(
+    { sdp: dataUrl(options.sdp), outputPath: options.outputPath },
+    options.signal,
+  );
+
+  if (options.onError) {
+    promise.catch((error: any) => {
+      options.onError!(error);
+    });
+  }
+
+  return { done: () => promise };
+}
+
 function dataUrl(input: string) {
   return "data:application/sdp;base64," + Buffer.from(input).toString("base64");
 }

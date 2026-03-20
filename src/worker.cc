@@ -20,6 +20,7 @@ extern "C" {
 #include "thread_messages.h"
 #include "audio_decode_thread.h"
 #include "audio_encode_thread.h"
+#include "save_audio_thread.h"
 #include "thread_with_promise_result.h"
 #define SDP_MAX_SIZE 2046
 
@@ -588,6 +589,48 @@ namespace hilokal {
     return ret;
   }
 
+  napi_value startSaveAudioThread(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 2;
+    napi_value args[2];
+    napi_value ret;
+    napi_status status = napi_ok;
+
+    struct SaveAudioThreadParams params = {};
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = get_option_string(env, args[0], "sdp", &params.sdpBase64);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = get_option_string(env, args[0], "outputPath", &params.outputPath);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    if (status != napi_ok) {
+      av_freep(&params.sdpBase64);
+      av_freep(&params.outputPath);
+      return NULL;
+    }
+
+    napi_value abort_signal = args[1];
+    napi_value external;
+    napi_value promise;
+
+    status = start_save_audio_thread(env, params, abort_signal, &external, &promise);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = napi_create_object(env, &ret);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = napi_set_named_property(env, ret, "external", external);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = napi_set_named_property(env, ret, "promise", promise);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    return ret;
+  }
+
   napi_value postFlushEncoder(napi_env env, napi_callback_info cbinfo) {
     size_t argsLength = 1;
     napi_value args[1];
@@ -755,6 +798,9 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "postClearProducerQueue", postClearProducerQueue);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "startSaveAudioThread", startSaveAudioThread);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     av_log_set_callback(av_log_override_callback);
