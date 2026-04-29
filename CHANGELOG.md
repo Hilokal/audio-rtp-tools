@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.0] - 2026-04-29
+
+- Add `localRtpPort` and `localRtcpPort` options to `produceRtp()` for binding specific local UDP ports
+
 ## [1.1.0] - 2026-03-21
 
 - Add `saveAudio()` function for recording RTP Opus streams directly to a WebM file without decoding
