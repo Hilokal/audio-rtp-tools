@@ -17,6 +17,11 @@ type ProduceOptions = {
   rtpPort: number;
   rtcpPort: number;
 
+  // Local UDP ports to bind for sending RTP/RTCP. Defaults to ephemeral
+  // ports chosen by the OS.
+  localRtpPort?: number;
+  localRtcpPort?: number;
+
   // sample rate of the pcm audio data that will be passed into the write function
   sampleRate: number;
 
@@ -93,7 +98,16 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     : options.ipAddress;
 
   const protocol = options.srtpParameters ? "srtp://" : "rtp://";
-  const rtpUrl = `${protocol}${host}:${options.rtpPort}`;
+
+  const urlParams = new URLSearchParams();
+  if (options.localRtpPort != null) {
+    urlParams.set("localrtpport", String(options.localRtpPort));
+  }
+  if (options.localRtcpPort != null) {
+    urlParams.set("localrtcpport", String(options.localRtcpPort));
+  }
+  const query = urlParams.toString();
+  const rtpUrl = `${protocol}${host}:${options.rtpPort}${query ? `?${query}` : ""}`;
 
   // TODO: We could probably support disabling rtcp
   if (rtpParameters.rtcp == null) {
