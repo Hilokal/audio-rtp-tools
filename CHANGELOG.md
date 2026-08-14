@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.0] - 2026-08-14
+
+- **Breaking**: FEC and DTX are now configured via the Opus codec parameters in `rtpParameters` (`useinbandfec` and `usedtx`) instead of the `opus.enableFec` / `opus.enableDtx` options on `produceRtp()`, which have been removed. This keeps the encoder and the signaled parameters in sync by construction.
+- `createRtpParameters()` accepts `{ enableFec?, enableDtx? }` options (defaults: FEC on, DTX off). `enableDtx` also sets `dtx: true` on the encoding, which disables mediasoup's RTP inactivity checks.
+- Behavior change: `produceRtp()` now honors `useinbandfec` from `rtpParameters` — with `createRtpParameters()` defaults, FEC is actually enabled on the encoder (previously it was signaled but only enabled if `opus.enableFec` was passed).
+
 ## [1.3.0] - 2026-08-14
 
 - Add DTX-style keep-alive packets to `produceRtp()`, enabled by default. After ~400ms with no audio written, a 1-byte Opus DTX packet is sent to keep NAT bindings, RTCP, and the receiver's jitter buffer warm during gaps between audio segments. Disable with `keepAlive: false`.
