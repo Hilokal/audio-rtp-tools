@@ -200,9 +200,9 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 | `onDrain` | `() => void?` | Called when the queue has room after `write()` returned `false`. For advanced backpressure handling (optional) |
 | `keepAlive` | `boolean?` | Send a 1-byte Opus DTX keep-alive packet after ~400ms of output silence (default `true`). Pass `false` if the receiver should see true silence between segments (see [Silence and keep-alives](#silence-and-keep-alives)) |
 | `opus.bitrate` | `number \| null?` | Opus encoder bitrate in bps, or `null` for auto |
-| `opus.enableFec` | `boolean?` | Enable forward error correction |
-| `opus.enableDtx` | `boolean?` | Enable DTX: suppress packets while the input PCM is silent, except a periodic comfort-noise refresh (default `false`) |
 | `opus.packetLossPercent` | `number?` | Expected packet loss percentage (helps FEC) |
+
+FEC and DTX are not options here — they are read from the Opus codec parameters in `rtpParameters` (`useinbandfec` and `usedtx`), so the encoder always matches what the stream signals. Configure them via [`createRtpParameters`](#creatertpparametersoptions-rtpparameters), or set the parameters directly if your `rtpParameters` come from elsewhere.
 
 **Returns** an object with:
 
@@ -252,9 +252,18 @@ The recommended output format is **WebM** (`.webm`). WebM supports Opus natively
 
 - **`done(): Promise<void>`** — Resolves when the file has been finalized and the thread has exited.
 
-### `createRtpParameters(): RtpParameters`
+### `createRtpParameters(options?): RtpParameters`
 
-Creates a default set of RTP parameters for Opus audio with a random SSRC and CNAME. Uses payload type 111 (the WebRTC convention for Opus), 48kHz clock rate, stereo, with FEC enabled.
+Creates a default set of RTP parameters for Opus audio with a random SSRC and CNAME. Uses payload type 111 (the WebRTC convention for Opus), 48kHz clock rate, stereo.
+
+These parameters are the source of truth for FEC and DTX: `produceRtp` configures its encoder from them, and `createSDP` carries them into the `a=fmtp:` line.
+
+**Options**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `enableFec` | `boolean?` | Signal (and enable) Opus in-band forward error correction via `useinbandfec` (default `true`) |
+| `enableDtx` | `boolean?` | Signal (and enable) Opus DTX via `usedtx`, and set `dtx: true` on the encoding, which disables mediasoup's RTP inactivity checks (default `false`) |
 
 ### `createSrtpParameters(): SrtpParameters`
 
@@ -314,7 +323,7 @@ For advanced scenarios where you need explicit flow control, `write()` returns a
 Two complementary mechanisms keep the RTP stream healthy during quiet periods:
 
 - **Keep-alive packets** (on by default): when nothing has been written for ~400ms, the producer thread sends a 1-byte Opus DTX packet with wall-clock-advancing timestamps. This keeps NAT bindings open, RTCP flowing, and the receiver's jitter buffer calibrated during long gaps between audio segments — without it, the first moments of audio after a long gap can sound distorted while the receiver's jitter buffer re-adapts. Receivers treat these packets as standard Opus DTX. Disable with `keepAlive: false`.
-- **Opus DTX** (opt-in via `opus.enableDtx`): when the input PCM itself is silent, libopus detects it and packets are suppressed except for a comfort-noise refresh roughly every 400ms, cutting bandwidth during silence by ~85%. This mirrors WebRTC's DTX behavior.
+- **Opus DTX** (opt-in via `createRtpParameters({ enableDtx: true })`, or `usedtx: 1` in your own rtpParameters): when the input PCM itself is silent, libopus detects it and packets are suppressed except for a comfort-noise refresh roughly every 400ms, cutting bandwidth during silence by ~85%. This mirrors WebRTC's DTX behavior.
 
 The two cover different cases: DTX handles silent audio being *written* (e.g. an AI model streaming silence), while keep-alives handle gaps where nothing is written at all (e.g. between model turns). They coordinate automatically — DTX refresh packets reset the keep-alive idle timer.
 

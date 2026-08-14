@@ -48,15 +48,12 @@ type ProduceOptions = {
   // pass false if the receiver should see true silence between segments.
   keepAlive?: boolean;
 
+  // Local encoder tuning that has no representation in rtpParameters.
+  // FEC and DTX are NOT set here — they are read from the opus codec
+  // parameters in rtpParameters (useinbandfec and usedtx), so the encoder
+  // always matches what the stream signals. See createRtpParameters().
   opus?: {
     bitrate?: number | null;
-    enableFec?: boolean;
-
-    // Enable DTX (discontinuous transmission). When the input PCM is silent,
-    // packets are suppressed except for a comfort-noise refresh roughly every
-    // 400ms, mirroring WebRTC's Opus DTX behavior. Defaults to false.
-    enableDtx?: boolean;
-
     packetLossPercent?: number;
   };
 };
@@ -141,6 +138,12 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
 
   const payloadType = rtpParameters.codecs[0].payloadType;
 
+  // FEC and DTX are driven by the signaled codec parameters so the encoder
+  // never diverges from what the rtpParameters advertise.
+  const codecParameters = rtpParameters.codecs[0].parameters ?? {};
+  const enableFec = Number(codecParameters.useinbandfec) === 1;
+  const enableDtx = Number(codecParameters.usedtx) === 1;
+
   if (rtpParameters.encodings == null || rtpParameters.encodings.length !== 1) {
     throw new Error("expected one encoding");
   }
@@ -154,8 +157,8 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     cname: cname,
     sampleRate: options.sampleRate,
     bitrate: options.opus?.bitrate ?? 0,
-    enableFec: options.opus?.enableFec ?? false,
-    enableDtx: options.opus?.enableDtx ?? false,
+    enableFec,
+    enableDtx,
     packetLossPercent: options.opus?.packetLossPercent ?? 0,
     cryptoSuite: srtpParameters?.cryptoSuite,
     keyBase64: srtpParameters?.keyBase64,
@@ -250,7 +253,19 @@ export function createSrtpParameters(): SrtpParameters {
   };
 }
 
-export function createRtpParameters(): RtpParameters {
+export function createRtpParameters(options?: {
+  // Signal (and enable) Opus in-band forward error correction. Default true.
+  enableFec?: boolean;
+
+  // Signal (and enable) Opus DTX: while the input PCM is silent, packets are
+  // suppressed except a comfort-noise refresh roughly every 400ms, mirroring
+  // WebRTC's behavior. Also sets dtx on the encoding, which disables
+  // mediasoup's RTP inactivity checks. Default false.
+  enableDtx?: boolean;
+}): RtpParameters {
+  const enableFec = options?.enableFec ?? true;
+  const enableDtx = options?.enableDtx ?? false;
+
   const cname = randomBytes(8).toString("hex");
   const list = new Int32Array(1);
   getRandomValues(list);
@@ -268,13 +283,14 @@ export function createRtpParameters(): RtpParameters {
         channels: 2,
         parameters: {
           minptime: 10,
-          useinbandfec: 1,
+          useinbandfec: enableFec ? 1 : 0,
+          ...(enableDtx ? { usedtx: 1 } : {}),
         },
         rtcpFeedback: [],
       },
     ],
     headerExtensions: [],
-    encodings: [{ ssrc }],
+    encodings: [enableDtx ? { ssrc, dtx: true } : { ssrc }],
     rtcp: {
       cname,
       reducedSize: true,

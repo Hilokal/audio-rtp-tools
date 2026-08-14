@@ -49,7 +49,6 @@ async function runProducer({
     sampleRate: encodeSampleRate,
     opus: {
       bitrate: null,
-      enableFec: true,
       packetLossPercent: 10,
     },
     queueDepth,
