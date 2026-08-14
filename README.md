@@ -198,8 +198,10 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 | `signal` | `AbortSignal?` | Abort signal for immediate shutdown (optional) |
 | `queueDepth` | `number?` | Encoder message queue depth (default 8192) |
 | `onDrain` | `() => void?` | Called when the queue has room after `write()` returned `false`. For advanced backpressure handling (optional) |
+| `keepAlive` | `boolean?` | Send a 1-byte Opus DTX keep-alive packet after ~400ms of output silence (default `true`). Pass `false` if the receiver should see true silence between segments (see [Silence and keep-alives](#silence-and-keep-alives)) |
 | `opus.bitrate` | `number \| null?` | Opus encoder bitrate in bps, or `null` for auto |
 | `opus.enableFec` | `boolean?` | Enable forward error correction |
+| `opus.enableDtx` | `boolean?` | Enable DTX: suppress packets while the input PCM is silent, except a periodic comfort-noise refresh (default `false`) |
 | `opus.packetLossPercent` | `number?` | Expected packet loss percentage (helps FEC) |
 
 **Returns** an object with:
@@ -210,6 +212,7 @@ Encodes PCM audio to Opus and sends it as an RTP stream.
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
 - **`setBitrate(bitrate: number | null): void`** — Change encoder bitrate at runtime.
 - **`setEnableFec(enableFec: boolean): void`** — Toggle FEC at runtime.
+- **`setEnableDtx(enableDtx: boolean): void`** — Toggle DTX at runtime.
 - **`setPacketLossPercent(percent: number): void`** — Update expected packet loss at runtime.
 
 ### `consumeRtp(options): ConsumeReturn`
@@ -305,6 +308,15 @@ Communication between JavaScript and native threads uses FFmpeg's `AVThreadMessa
 The producer thread sends RTP packets at real-time speed, so if your source generates audio faster than real-time (common with AI models that stream in bursts), data queues up internally. The default queue depth of 8192 can absorb roughly 2–3 minutes of audio ahead of real-time playback (assuming typical 20ms writes) — more than enough for typical AI streaming use cases. You can call `write()` without checking its return value and everything will work fine.
 
 For advanced scenarios where you need explicit flow control, `write()` returns a boolean: `true` means the queue accepted the data, `false` means the queue was full and the data was dropped. You can pass an `onDrain` callback to be notified when the queue has room again, and a `queueDepth` to control how deep the queue is. Note that unlike Node.js writable streams, data is not buffered when `write()` returns `false` — it is discarded, so the caller must retry if the data is important.
+
+### Silence and keep-alives
+
+Two complementary mechanisms keep the RTP stream healthy during quiet periods:
+
+- **Keep-alive packets** (on by default): when nothing has been written for ~400ms, the producer thread sends a 1-byte Opus DTX packet with wall-clock-advancing timestamps. This keeps NAT bindings open, RTCP flowing, and the receiver's jitter buffer calibrated during long gaps between audio segments — without it, the first moments of audio after a long gap can sound distorted while the receiver's jitter buffer re-adapts. Receivers treat these packets as standard Opus DTX. Disable with `keepAlive: false`.
+- **Opus DTX** (opt-in via `opus.enableDtx`): when the input PCM itself is silent, libopus detects it and packets are suppressed except for a comfort-noise refresh roughly every 400ms, cutting bandwidth during silence by ~85%. This mirrors WebRTC's DTX behavior.
+
+The two cover different cases: DTX handles silent audio being *written* (e.g. an AI model streaming silence), while keep-alives handle gaps where nothing is written at all (e.g. between model turns). They coordinate automatically — DTX refresh packets reset the keep-alive idle timer.
 
 ## Building from source
 

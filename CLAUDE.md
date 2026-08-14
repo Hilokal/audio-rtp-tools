@@ -45,7 +45,7 @@ All audio processing runs on dedicated pthreads, not the Node.js event loop. Com
 1. Creates an Opus encoder (caller-specified sample rate via `params.sampleRate`, stereo, VOIP application)
 2. Starts a producer thread with RTP/SRTP parameters
 3. Main loop: receives `POST_PCM_BUFFER` messages, accumulates mono 16-bit PCM into 20ms frames, converts mono→stereo, encodes with libopus, posts `AVPacket` to producer thread
-4. Also handles runtime config messages: `SET_ENCODER_BITRATE`, `SET_ENCODER_FEC`, `SET_ENCODER_PACKET_LOSS_PERC`
+4. Also handles runtime config messages: `SET_ENCODER_BITRATE`, `SET_ENCODER_FEC`, `SET_ENCODER_PACKET_LOSS_PERC`, `SET_ENCODER_DTX`. With DTX enabled, `opus_encode` outputs of ≤2 bytes (silent frames) are dropped without posting to the producer, but PTS still advances; libopus emits a transmittable comfort-noise refresh (>2 bytes) every ~400ms of silence
 5. `FLUSH_OPUS_ENCODER` message (triggered by `endSegment()`) flushes any partial frame and resets PTS to 0, causing the producer thread to rebase timestamps to wall-clock time on the next packet
 
 Key constants: output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes. Input sample rate is configurable.
@@ -57,6 +57,8 @@ Receives RTP via SDP, decodes Opus to PCM, delivers audio data back to JS via a 
 ### Producer thread (`src/producer_thread.cc`)
 
 Muxes `AVPacket`s into an RTP/SRTP output stream using ffmpeg's libavformat. Has both a NAPI API (for direct JS use) and a raw pthread API (for use as a child of the encoder thread).
+
+**Keep-alives**: a JS `setInterval` (400ms, on by default via the `keepAlive` option) posts `KEEP_ALIVE_TICK` messages through the encoder to the producer. If nothing has been written for ≥350ms, the producer emits a 1-byte Opus DTX packet (`KEEP_ALIVE_TOC`) stamped at wall-clock pts. The producer tracks `last_sent_end_pts` (output timeline high-water mark); real packets that would land behind it get the rebase shifted forward so RTP timestamps never go backwards.
 
 ### Demuxer (`src/demuxer.cc`)
 
