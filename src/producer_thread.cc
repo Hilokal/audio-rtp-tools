@@ -21,6 +21,17 @@ extern "C" {
 // Setting it to 1/10 of a second seems to work well.
 #define MAX_FUTURE (OPUS_SAMPLE_RATE / 10)
 
+// Opus TOC byte: config 15 (Hybrid, fullband, 20ms), stereo, code 0 (one frame).
+// A 1-byte packet is a zero-length frame, which decoders treat as DTX/no-data
+// and conceal for the frame's duration (RFC 6716 §3.4).
+#define KEEP_ALIVE_TOC 0x7C
+// 20ms at 48kHz, matching the TOC config above
+#define KEEP_ALIVE_DURATION (OPUS_SAMPLE_RATE / 50)
+// Only emit a keep-alive if nothing has been written for this long. Ticks
+// arrive every ~400ms, so the effective cadence during silence is ~400ms —
+// the same as Opus DTX.
+#define KEEP_ALIVE_QUIET_USEC 350000
+
 static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadParams &params) {
   AVFormatContext *output_ctx = NULL;
   AVStream *out_stream = NULL;
@@ -35,6 +46,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadP
   int64_t rebase_pts = AV_NOPTS_VALUE;
   int64_t last_pts = AV_NOPTS_VALUE;
   int64_t next_expected_pts = AV_NOPTS_VALUE;
+  // Wall-clock time of the last packet written (real or keep-alive)
+  int64_t last_write_time = stream_start;
+  // End timestamp (pts + duration) of the last packet written, real or
+  // keep-alive. The output timeline must never move backwards past this.
+  int64_t last_sent_end_pts = AV_NOPTS_VALUE;
   int ret = 0;
 
   // The options dictionary will take ownership of all the strdup'd strings
@@ -156,6 +172,17 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadP
         continue;
       }
 
+      // Keep-alive packets advance the output timeline past the encoder's
+      // timeline (which is frozen while no PCM arrives). If this packet lands
+      // behind the last keep-alive, shift the rebase forward — the muxer
+      // requires monotonic timestamps.
+      if (last_sent_end_pts != AV_NOPTS_VALUE && pkt->pts < last_sent_end_pts) {
+        int64_t shift = last_sent_end_pts - pkt->pts;
+        rebase_pts += shift;
+        pkt->pts += shift;
+        pkt->dts += shift;
+      }
+
       next_expected_pts = pkt->pts + pkt->duration;
 
       ret = av_write_frame(output_ctx, pkt);
@@ -163,6 +190,37 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, const ProducerThreadP
         fprintf(stderr, "av_write_frame failed [%d]\n", ret);
         thread_message_free_func(&thread_message);
         goto cleanup;
+      }
+
+      last_sent_end_pts = pkt->pts + pkt->duration;
+      last_write_time = av_gettime_relative();
+    } else if (thread_message.type == KEEP_ALIVE_TICK) {
+      int64_t now = av_gettime_relative();
+
+      if (now - last_write_time >= KEEP_ALIVE_QUIET_USEC) {
+        int64_t ka_pts = av_rescale(OPUS_SAMPLE_RATE, (now - stream_start), MICROSECONDS);
+        if (last_sent_end_pts != AV_NOPTS_VALUE && ka_pts < last_sent_end_pts) {
+          ka_pts = last_sent_end_pts;
+        }
+
+        AVPacket *pkt = av_packet_alloc();
+        if (pkt != NULL && av_new_packet(pkt, 1) == 0) {
+          pkt->data[0] = KEEP_ALIVE_TOC;
+          pkt->pts = ka_pts;
+          pkt->dts = ka_pts;
+          pkt->duration = KEEP_ALIVE_DURATION;
+
+          ret = av_write_frame(output_ctx, pkt);
+          if (ret < 0) {
+            fprintf(stderr, "av_write_frame failed for keep-alive [%d]\n", ret);
+            av_packet_free(&pkt);
+            goto cleanup;
+          }
+
+          last_sent_end_pts = ka_pts + KEEP_ALIVE_DURATION;
+          last_write_time = now;
+        }
+        av_packet_free(&pkt);
       }
     }
 

@@ -42,6 +42,12 @@ type ProduceOptions = {
   // If this signal is raised, the sending thread will shutdown immediately.
   signal?: AbortSignal;
 
+  // Send a 1-byte Opus DTX keep-alive packet roughly every 400ms while no
+  // audio is being written. Keeps NAT bindings, RTCP, and the receiver's
+  // jitter buffer warm during long gaps between segments. Defaults to true;
+  // pass false if the receiver should see true silence between segments.
+  keepAlive?: boolean;
+
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
@@ -179,6 +185,18 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
         /* Ignoring error. Just don't want a danging promise */
       },
     );
+  }
+
+  if (options.keepAlive !== false) {
+    // The producer thread only emits a keep-alive if the stream has actually
+    // been quiet, so ticking blindly here is safe.
+    const keepAliveTimer = setInterval(() => {
+      native.postKeepAliveTick(external);
+    }, 400);
+    keepAliveTimer.unref();
+
+    const clear = () => clearInterval(keepAliveTimer);
+    promise.then(clear, clear);
   }
 
   function write(buffer: Buffer): boolean {

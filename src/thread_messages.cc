@@ -142,6 +142,20 @@ int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq) {
   return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 }
 
+int post_keep_alive_tick_to_thread(AVThreadMessageQueue *mq) {
+  ThreadMessage thread_message = {
+    .type = KEEP_ALIVE_TICK,
+    .param = {
+      .pkt = NULL
+    },
+    .async = NULL
+  };
+
+  // A full queue means the pipeline is busy with real audio, so a keep-alive
+  // is unnecessary — drop silently on EAGAIN.
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent) {
   ThreadMessage thread_message = {
     .type = SET_ENCODER_PACKET_LOSS_PERC,

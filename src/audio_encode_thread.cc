@@ -243,6 +243,10 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       if (producer_thread != NULL) {
         av_thread_message_flush(producer_thread->message_queue);
       }
+    } else if (thread_message.type == KEEP_ALIVE_TICK) {
+      if (producer_thread != NULL) {
+        post_keep_alive_tick_to_thread(producer_thread->message_queue);
+      }
     } else if (thread_message.type == SET_ENCODER_BITRATE) {
       opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(
         thread_message.param.int_value > 0 ? thread_message.param.int_value : OPUS_AUTO));
