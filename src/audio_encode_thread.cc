@@ -70,6 +70,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
   int64_t total_samples_encoded = 0;
   int64_t total_frames_encoded = 0;
+  int64_t total_frames_dtx_suppressed = 0;
+  bool dtx_enabled = params.enableDtx;
 
   //
   // Start producer thread with RTP parameters
@@ -110,6 +112,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
     // Set expected packet loss percentage
     opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(params.packetLossPercent));
+
+    // Set DTX (discontinuous transmission)
+    opus_encoder_ctl(opus_encoder, OPUS_SET_DTX(dtx_enabled ? 1 : 0));
   }
 
   fprintf(stderr, "audio_encode_thread: started, bitrate=%d\n", params.bitrate);
@@ -164,6 +169,20 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
             continue;
           }
 
+          // With DTX active, outputs of 1-2 bytes are silence frames that
+          // need not be transmitted. Drop them, but keep PTS advancing so
+          // RTP timestamps continue to track real time. libopus emits a
+          // full comfort-noise refresh frame (>2 bytes) every ~400ms of
+          // silence, which is transmitted normally.
+          if (dtx_enabled && encoded_len <= 2) {
+            pts += FRAME_SIZE_OUTPUT;
+            accum_pos = 0;
+            total_frames_dtx_suppressed++;
+            total_samples_encoded += frame_size_input;
+            continue;
+          }
+
+
           // Create AVPacket - PTS is at 48kHz!
           AVPacket *pkt = av_packet_alloc();
           if (pkt == NULL) {
@@ -217,7 +236,10 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         }
 
         int encoded_len = opus_encode(opus_encoder, stereo_frame, frame_size_input, opus_data, MAX_OPUS_FRAME_SIZE);
-        if (encoded_len > 0) {
+        if (dtx_enabled && encoded_len > 0 && encoded_len <= 2) {
+          // DTX suppressed the final (silent) partial frame — nothing to send
+          total_frames_dtx_suppressed++;
+        } else if (encoded_len > 0) {
           AVPacket *pkt = av_packet_alloc();
           if (pkt != NULL && av_new_packet(pkt, encoded_len) == 0) {
             memcpy(pkt->data, opus_data, encoded_len);
@@ -252,6 +274,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         thread_message.param.int_value > 0 ? thread_message.param.int_value : OPUS_AUTO));
     } else if (thread_message.type == SET_ENCODER_FEC) {
       opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(thread_message.param.int_value));
+    } else if (thread_message.type == SET_ENCODER_DTX) {
+      dtx_enabled = thread_message.param.int_value != 0;
+      opus_encoder_ctl(opus_encoder, OPUS_SET_DTX(thread_message.param.int_value));
     } else if (thread_message.type == SET_ENCODER_PACKET_LOSS_PERC) {
       opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(thread_message.param.int_value));
     } else {
@@ -260,10 +285,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   }
 
 cleanup:
-  fprintf(stderr, "audio_encode_thread: stopping, encoded %lld frames (%lld samples, %.2f sec)\n",
+  fprintf(stderr, "audio_encode_thread: stopping, encoded %lld frames (%lld samples, %.2f sec), dtx suppressed %lld frames\n",
           (long long)total_frames_encoded,
           (long long)total_samples_encoded,
-          (double)total_samples_encoded / input_sample_rate);
+          (double)total_samples_encoded / input_sample_rate,
+          (long long)total_frames_dtx_suppressed);
 
   if (producer_thread != NULL) {
     int producer_ret = stop_producer_thread_raw(producer_thread);

@@ -12,6 +12,7 @@ struct AudioEncodeThreadParams {
   int32_t sampleRate; // input PCM sample rate (e.g., 24000, 48000)
   int32_t bitrate;    // e.g., 32000 for speech
   bool enableFec;
+  bool enableDtx;
   int32_t packetLossPercent;
 };
 

@@ -118,6 +118,18 @@ int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable) {
   return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 }
 
+int post_set_dtx_to_thread(AVThreadMessageQueue *mq, bool enable) {
+  ThreadMessage thread_message = {
+    .type = SET_ENCODER_DTX,
+    .param = {
+      .int_value = enable ? 1 : 0
+    },
+    .async = NULL
+  };
+
+  return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
+}
+
 int post_flush_encoder_to_thread(AVThreadMessageQueue *mq) {
   ThreadMessage thread_message = {
     .type = FLUSH_OPUS_ENCODER,

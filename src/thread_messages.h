@@ -22,6 +22,7 @@ enum ThreadMessageType {
   SET_ENCODER_BITRATE,
   SET_ENCODER_FEC,
   SET_ENCODER_PACKET_LOSS_PERC,
+  SET_ENCODER_DTX,
 
   // Flush remaining PCM in the encoder accumulator, then reset PTS
   FLUSH_OPUS_ENCODER,
@@ -60,6 +61,7 @@ int post_pcm_buffer_to_thread(AVThreadMessageQueue *message_queue, void *buffer,
 int post_set_bitrate_to_thread(AVThreadMessageQueue *mq, int32_t bitrate);
 int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable);
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent);
+int post_set_dtx_to_thread(AVThreadMessageQueue *mq, bool enable);
 int post_flush_encoder_to_thread(AVThreadMessageQueue *mq);
 int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq);
 int post_keep_alive_tick_to_thread(AVThreadMessageQueue *mq);

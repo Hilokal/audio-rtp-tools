@@ -51,6 +51,12 @@ type ProduceOptions = {
   opus?: {
     bitrate?: number | null;
     enableFec?: boolean;
+
+    // Enable DTX (discontinuous transmission). When the input PCM is silent,
+    // packets are suppressed except for a comfort-noise refresh roughly every
+    // 400ms, mirroring WebRTC's Opus DTX behavior. Defaults to false.
+    enableDtx?: boolean;
+
     packetLossPercent?: number;
   };
 };
@@ -77,6 +83,7 @@ type ProduceReturn = {
 
   setBitrate: (bitrate: number | null) => void;
   setEnableFec: (enableFec: boolean) => void;
+  setEnableDtx: (enableDtx: boolean) => void;
   setPacketLossPercent: (percent: number) => void;
 };
 
@@ -148,6 +155,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     sampleRate: options.sampleRate,
     bitrate: options.opus?.bitrate ?? 0,
     enableFec: options.opus?.enableFec ?? false,
+    enableDtx: options.opus?.enableDtx ?? false,
     packetLossPercent: options.opus?.packetLossPercent ?? 0,
     cryptoSuite: srtpParameters?.cryptoSuite,
     keyBase64: srtpParameters?.keyBase64,
@@ -211,6 +219,10 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     native.postSetEnableFec(external, enableFec);
   }
 
+  function setEnableDtx(enableDtx: boolean) {
+    native.postSetEnableDtx(external, enableDtx);
+  }
+
   function setPacketLossPercent(percent: number) {
     native.postSetPacketLossPercent(external, percent);
   }
@@ -226,6 +238,7 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     endSegment,
     setBitrate,
     setEnableFec,
+    setEnableDtx,
     setPacketLossPercent,
   };
 }
