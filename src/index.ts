@@ -86,7 +86,15 @@ type ProduceReturn = {
 
 type ConsumeOptions = {
   sdp: string;
-  onAudioData: (data: { buffer: Buffer; pts: number | null }) => void;
+  onAudioData: (data: {
+    buffer: Buffer;
+    pts: number | null;
+    // True on the first frame after a timestamp gap longer than the decoder
+    // conceals (3s): the frames before it end more than that earlier in the
+    // stream. Short gaps are filled with packet-loss concealment and carry
+    // no marker.
+    discontinuity: boolean;
+  }) => void;
   onError?: (error: Error) => void;
 
   // Sample rate that the audio data will be decoded to.

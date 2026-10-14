@@ -179,6 +179,96 @@ it(
 );
 
 it(
+  "caps packet-loss concealment and flags the discontinuity after a long gap",
+  async () => {
+    const GAP_RTP_PORT = 9020;
+    const GAP_MS = 5000;
+    const CONCEALMENT_CAP_MS = 3000;
+    const SEGMENT_MS = 1000;
+
+    const rtpParameters = createRtpParameters();
+    const srtpParameters = createSrtpParameters();
+
+    const sdp = createSDP({
+      subject: "Gap Test",
+      rtpParameters,
+      originIpAddress: "127.0.0.1",
+      destinationIpAddress: "127.0.0.1",
+      rtpPort: GAP_RTP_PORT,
+      rtcpPort: GAP_RTP_PORT + 1,
+      srtpParameters,
+    });
+
+    const abortController = new AbortController();
+
+    let decodedBytes = 0;
+    const discontinuities = [];
+    const consumer = consumeRtp({
+      sdp,
+      sampleRate: decodeSampleRate,
+      signal: abortController.signal,
+      onAudioData: ({ buffer, pts, discontinuity }) => {
+        decodedBytes += buffer.byteLength;
+        if (discontinuity) {
+          discontinuities.push(pts);
+        }
+      },
+      onError: (error) => {
+        console.log("consumer error", error);
+      },
+    });
+
+    // No keep-alives: they would carry wall-clock timestamps through the gap
+    // and turn the single long gap into a train of short ones.
+    const producer = produceRtp({
+      ipAddress: "127.0.0.1",
+      rtpPort: GAP_RTP_PORT,
+      rtcpPort: GAP_RTP_PORT + 1,
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+      keepAlive: false,
+      sampleRate: encodeSampleRate,
+      onError: (error) => {
+        console.log("producer error", error);
+      },
+    });
+
+    const pcmData = fs.readFileSync(
+      path.join(__dirname, "LJ025-0076_24k_mono.wav"),
+    ).subarray(44);
+    const segment = pcmData.subarray(0, (encodeSampleRate * SEGMENT_MS * 2) / 1000);
+    const writeSegment = () => {
+      const chunkSize = 960;
+      for (let offset = 0; offset < segment.length; offset += chunkSize) {
+        producer.write(segment.subarray(offset, offset + chunkSize));
+      }
+    };
+
+    writeSegment();
+    // endSegment() rebases the next packet to wall-clock time, so the idle
+    // period becomes an RTP timestamp gap of GAP_MS.
+    producer.endSegment();
+    await new Promise((resolve) => setTimeout(resolve, GAP_MS));
+    writeSegment();
+    producer.end();
+    await producer.done();
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    abortController.abort();
+    await consumer.done();
+
+    // Two segments of real audio plus at most the concealment cap, not the
+    // whole gap.
+    const decodedMs = (decodedBytes / (decodeSampleRate * 2)) * 1000;
+    expect(decodedMs).toBeGreaterThan(2 * SEGMENT_MS + CONCEALMENT_CAP_MS - 500);
+    expect(decodedMs).toBeLessThan(2 * SEGMENT_MS + CONCEALMENT_CAP_MS + 500);
+    expect(discontinuities).toHaveLength(1);
+  },
+  20 * 1000,
+);
+
+it(
   "saves RTP audio to a webm file via saveAudio",
   async () => {
     const SAVE_RTP_PORT = 9010;
