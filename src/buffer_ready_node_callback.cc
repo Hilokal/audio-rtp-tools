@@ -27,6 +27,7 @@ napi_status create_js_result(napi_env env, AudioBuffer *buffer, napi_value *obje
   napi_value js_buffer;
   napi_value js_pts;
   napi_value js_discontinuity;
+  napi_value js_concealed;
 
   // Convert into node Buffer object
   status = napi_create_external_buffer(env, buffer->len, buffer->buf, finalize_external_buffer, NULL, &js_buffer);
@@ -57,6 +58,14 @@ napi_status create_js_result(napi_env env, AudioBuffer *buffer, napi_value *obje
     return status;
 
   status = napi_set_named_property(env, *object, "discontinuity", js_discontinuity);
+  if (status != napi_ok)
+    return status;
+
+  status = napi_get_boolean(env, buffer->concealed, &js_concealed);
+  if (status != napi_ok)
+    return status;
+
+  status = napi_set_named_property(env, *object, "concealed", js_concealed);
   if (status != napi_ok)
     return status;
 

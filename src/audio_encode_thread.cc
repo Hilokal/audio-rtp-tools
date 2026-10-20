@@ -174,7 +174,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           // RTP timestamps continue to track real time. libopus emits a
           // full comfort-noise refresh frame (>2 bytes) every ~400ms of
           // silence, which is transmitted normally.
-          if (dtx_enabled && encoded_len <= 2) {
+          if (dtx_enabled && encoded_len <= DTX_PACKET_MAX_BYTES) {
             pts += FRAME_SIZE_OUTPUT;
             accum_pos = 0;
             total_frames_dtx_suppressed++;
@@ -236,7 +236,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         }
 
         int encoded_len = opus_encode(opus_encoder, stereo_frame, frame_size_input, opus_data, MAX_OPUS_FRAME_SIZE);
-        if (dtx_enabled && encoded_len > 0 && encoded_len <= 2) {
+        if (dtx_enabled && encoded_len > 0 && encoded_len <= DTX_PACKET_MAX_BYTES) {
           // DTX suppressed the final (silent) partial frame — nothing to send
           total_frames_dtx_suppressed++;
         } else if (encoded_len > 0) {
