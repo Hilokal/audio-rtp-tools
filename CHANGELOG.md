@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.0] - 2026-10-20
+
+- `onAudioData` receives a `concealed: boolean` field: true for frames the decoder synthesized rather than decoded from audio the sender sent (PLC or FEC filling a timestamp gap, and DTX / keep-alive packets of 2 bytes or less), false otherwise (additive; existing callers are unaffected). During Opus DTX silence this separates the ~400 ms comfort-noise refreshes, which carry the sender's real background, from the concealment around them.
+
 ## [1.5.0] - 2026-10-14
 
 - `consumeRtp()` caps packet-loss concealment at 3 seconds per RTP timestamp gap. Previously every missing frame was synthesized, so a speaker returning from a long DTX silence or a paused producer arrived as one burst of concealed frames covering the whole gap (hours, in production). Gaps longer than the cap now skip to the next packet with the decoder state reset.
