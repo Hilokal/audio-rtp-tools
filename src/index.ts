@@ -94,6 +94,11 @@ type ConsumeOptions = {
     // stream. Short gaps are filled with packet-loss concealment and carry
     // no marker.
     discontinuity: boolean;
+    // True when the decoder synthesized this frame rather than decoding audio
+    // the sender sent for it: concealment of a timestamp gap (PLC or FEC), or
+    // a DTX / keep-alive packet. During Opus DTX silence most frames are
+    // concealed; the comfort-noise refresh every ~400ms is not.
+    concealed: boolean;
   }) => void;
   onError?: (error: Error) => void;
 

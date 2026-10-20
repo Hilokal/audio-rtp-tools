@@ -217,6 +217,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
                 // PTS for recovered frames: interpolate from expected_pts
                 audio_buffer.pts = expected_pts + (i * last_frame_size * pts_scale);
                 audio_buffer.discontinuity = false;
+                audio_buffer.concealed = true;
                 send_callback_for_many(buffer_ready_async, &audio_buffer);
               }
             }
@@ -250,6 +251,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           audio_buffer.len = frame_size * sizeof(int16_t);
           audio_buffer.pts = pkt_pts;
           audio_buffer.discontinuity = pending_discontinuity;
+          audio_buffer.concealed = pkt->size <= DTX_PACKET_MAX_BYTES;
           send_callback_for_many(buffer_ready_async, &audio_buffer);
         }
       }

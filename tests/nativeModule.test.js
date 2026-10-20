@@ -20,6 +20,8 @@ const encodeSampleRate = 24000;
 // Decode at a different sample rate.
 const decodeSampleRate = 16000;
 
+const decodedBytesToMs = (bytes) => (bytes / (decodeSampleRate * 2)) * 1000;
+
 async function runProducer({
   rtpParameters,
   srtpParameters,
@@ -202,13 +204,17 @@ it(
     const abortController = new AbortController();
 
     let decodedBytes = 0;
+    let concealedBytes = 0;
     const discontinuities = [];
     const consumer = consumeRtp({
       sdp,
       sampleRate: decodeSampleRate,
       signal: abortController.signal,
-      onAudioData: ({ buffer, pts, discontinuity }) => {
+      onAudioData: ({ buffer, pts, discontinuity, concealed }) => {
         decodedBytes += buffer.byteLength;
+        if (concealed) {
+          concealedBytes += buffer.byteLength;
+        }
         if (discontinuity) {
           discontinuities.push(pts);
         }
@@ -260,10 +266,123 @@ it(
 
     // Two segments of real audio plus at most the concealment cap, not the
     // whole gap.
-    const decodedMs = (decodedBytes / (decodeSampleRate * 2)) * 1000;
+    const decodedMs = decodedBytesToMs(decodedBytes);
     expect(decodedMs).toBeGreaterThan(2 * SEGMENT_MS + CONCEALMENT_CAP_MS - 500);
     expect(decodedMs).toBeLessThan(2 * SEGMENT_MS + CONCEALMENT_CAP_MS + 500);
     expect(discontinuities).toHaveLength(1);
+    // Everything synthesized for the gap, and nothing else, is marked.
+    const concealedMs = decodedBytesToMs(concealedBytes);
+    expect(concealedMs).toBeGreaterThan(CONCEALMENT_CAP_MS - 100);
+    expect(concealedMs).toBeLessThan(CONCEALMENT_CAP_MS + 100);
+  },
+  20 * 1000,
+);
+
+it(
+  "marks the frames concealed during DTX silence, not the comfort-noise refreshes",
+  async () => {
+    const DTX_RTP_PORT = 9030;
+    const SPEECH_MS = 1000;
+    const SILENCE_MS = 2000;
+
+    const rtpParameters = createRtpParameters({ enableDtx: true });
+    const srtpParameters = createSrtpParameters();
+
+    const sdp = createSDP({
+      subject: "DTX Concealment Test",
+      rtpParameters,
+      originIpAddress: "127.0.0.1",
+      destinationIpAddress: "127.0.0.1",
+      rtpPort: DTX_RTP_PORT,
+      rtcpPort: DTX_RTP_PORT + 1,
+      srtpParameters,
+    });
+
+    const abortController = new AbortController();
+
+    const frames = [];
+    const consumer = consumeRtp({
+      sdp,
+      sampleRate: decodeSampleRate,
+      signal: abortController.signal,
+      onAudioData: ({ buffer, pts, concealed }) => {
+        frames.push({ pts, concealed, bytes: buffer.byteLength });
+      },
+      onError: (error) => {
+        console.log("consumer error", error);
+      },
+    });
+
+    let resolveDrain;
+    // No keep-alives: the test writes faster than real time, so only the
+    // encoder's DTX decides what goes on the wire.
+    const producer = produceRtp({
+      ipAddress: "127.0.0.1",
+      rtpPort: DTX_RTP_PORT,
+      rtcpPort: DTX_RTP_PORT + 1,
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+      keepAlive: false,
+      sampleRate: encodeSampleRate,
+      onDrain: () => {
+        if (resolveDrain) {
+          resolveDrain();
+          resolveDrain = undefined;
+        }
+      },
+      onError: (error) => {
+        console.log("producer error", error);
+      },
+    });
+
+    const pcmData = fs.readFileSync(
+      path.join(__dirname, "LJ025-0076_24k_mono.wav"),
+    ).subarray(44);
+    const msToBytes = (ms) => (encodeSampleRate * ms * 2) / 1000;
+    const speech = pcmData.subarray(0, msToBytes(SPEECH_MS));
+    const silence = Buffer.alloc(msToBytes(SILENCE_MS));
+    const writeAll = async (pcm) => {
+      const chunkSize = 960;
+      for (let offset = 0; offset < pcm.length; offset += chunkSize) {
+        const chunk = pcm.subarray(offset, offset + chunkSize);
+        while (!producer.write(chunk)) {
+          await new Promise((resolve) => {
+            resolveDrain = resolve;
+          });
+        }
+      }
+    };
+
+    await writeAll(speech);
+    await writeAll(silence);
+    await writeAll(speech);
+    producer.end();
+    await producer.done();
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    abortController.abort();
+    await consumer.done();
+
+    const sumMs = (list) => decodedBytesToMs(list.reduce((sum, f) => sum + f.bytes, 0));
+    const totalMs = sumMs(frames);
+    const concealedMs = sumMs(frames.filter((f) => f.concealed));
+    // The stream stays continuous, and most of the silence was never sent:
+    // libopus keeps sending for ~200ms before DTX starts, then sends one
+    // refresh frame per ~400ms.
+    expect(totalMs).toBeGreaterThan(2 * SPEECH_MS + SILENCE_MS - 300);
+    expect(totalMs).toBeLessThan(2 * SPEECH_MS + SILENCE_MS + 300);
+    expect(concealedMs).toBeGreaterThan(SILENCE_MS / 2);
+    expect(concealedMs).toBeLessThan(SILENCE_MS + 500);
+
+    // The refreshes inside the silence arrive as real frames.
+    const basePts = frames[0].pts;
+    const ptsToMs = (pts) => ((pts - basePts) * 1000) / 48000;
+    const realInSilence = frames.filter((f) => {
+      const atMs = ptsToMs(f.pts);
+      return !f.concealed && atMs > SPEECH_MS + 300 && atMs < SPEECH_MS + SILENCE_MS - 50;
+    });
+    expect(realInSilence.length).toBeGreaterThanOrEqual(3);
   },
   20 * 1000,
 );
