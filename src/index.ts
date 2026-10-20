@@ -86,7 +86,20 @@ type ProduceReturn = {
 
 type ConsumeOptions = {
   sdp: string;
-  onAudioData: (data: { buffer: Buffer; pts: number | null }) => void;
+  onAudioData: (data: {
+    buffer: Buffer;
+    pts: number | null;
+    // True on the first frame after a timestamp gap longer than the decoder
+    // conceals (3s): the frames before it end more than that earlier in the
+    // stream. Short gaps are filled with packet-loss concealment and carry
+    // no marker.
+    discontinuity: boolean;
+    // True when the decoder synthesized this frame rather than decoding audio
+    // the sender sent for it: concealment of a timestamp gap (PLC or FEC), or
+    // a DTX / keep-alive packet. During Opus DTX silence most frames are
+    // concealed; the comfort-noise refresh every ~400ms is not.
+    concealed: boolean;
+  }) => void;
   onError?: (error: Error) => void;
 
   // Sample rate that the audio data will be decoded to.

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.0] - 2026-10-20
+
+- `onAudioData` receives a `concealed: boolean` field: true for frames the decoder synthesized rather than decoded from audio the sender sent (PLC or FEC filling a timestamp gap, and DTX / keep-alive packets of 2 bytes or less), false otherwise (additive; existing callers are unaffected). During Opus DTX silence this separates the ~400 ms comfort-noise refreshes, which carry the sender's real background, from the concealment around them.
+
+## [1.5.0] - 2026-10-14
+
+- `consumeRtp()` caps packet-loss concealment at 3 seconds per RTP timestamp gap. Previously every missing frame was synthesized, so a speaker returning from a long DTX silence or a paused producer arrived as one burst of concealed frames covering the whole gap (hours, in production). Gaps longer than the cap now skip to the next packet with the decoder state reset.
+- `onAudioData` receives a `discontinuity: boolean` field: true on the first frame after a gap that exceeded the cap, false otherwise (additive; existing callers are unaffected).
+- The decode summary line reports a gap histogram (up to 400 ms, up to 5 s, longer) and the total time skipped.
+
 ## [1.4.0] - 2026-08-14
 
 - **Breaking**: FEC and DTX are now configured via the Opus codec parameters in `rtpParameters` (`useinbandfec` and `usedtx`) instead of the `opus.enableFec` / `opus.enableDtx` options on `produceRtp()`, which have been removed. This keeps the encoder and the signaled parameters in sync by construction.

@@ -226,12 +226,16 @@ Receives an RTP Opus stream and decodes it to PCM.
 | `sdp` | `string` | SDP describing the RTP stream to receive |
 | `sampleRate` | `number` | Output sample rate (8000, 12000, 16000, 24000, or 48000) |
 | `signal` | `AbortSignal` | Abort signal to stop the consumer |
-| `onAudioData` | `(data: { buffer: Buffer; pts: number \| null }) => void` | Called for each decoded audio frame |
+| `onAudioData` | `(data: { buffer: Buffer; pts: number \| null; discontinuity: boolean; concealed: boolean }) => void` | Called for each decoded audio frame |
 | `onError` | `(error: Error) => void?` | Error callback (optional) |
 
 **Returns** an object with:
 
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
+
+**Timestamp gaps.** When packets are lost, or the sender stops sending (Opus DTX during silence, a paused WebRTC producer), the decoder fills the missing RTP timestamps with Opus packet-loss concealment so the PCM output stays continuous, up to **3 seconds** per gap. A longer gap is not synthesized: output skips to the next packet and that frame is delivered with `discontinuity: true`, meaning the audio before it ends more than 3 seconds earlier in the stream. Short gaps carry no marker. The decode summary printed on exit counts gaps by length (up to the ~400 ms DTX refresh cadence, up to 5 s, longer) and the time skipped.
+
+**Concealed frames.** Every frame the decoder synthesized rather than decoded from audio the sender sent is delivered with `concealed: true`: the concealment filling a timestamp gap (PLC, or FEC from the next packet), and DTX / keep-alive packets of 2 bytes or less, which libopus also decodes as concealment. During Opus DTX silence nearly every frame is concealed; the comfort-noise refresh the encoder sends every ~400 ms is not, and carries the sender's real background. Use the flag when measuring the signal itself (levels, noise floor), where concealment would read as the sender's audio fading out.
 
 ### `saveAudio(options): SaveAudioReturn`
 

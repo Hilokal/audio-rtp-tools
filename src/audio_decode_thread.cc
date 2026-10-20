@@ -19,6 +19,19 @@ extern "C" {
 #define OPUS_FRAME_DURATION_MS 20
 #define OPUS_MAX_FRAME_SIZE (960 * 6)  // Max frame size for opus
 
+// Longest timestamp gap filled with packet-loss concealment. Opus DTX senders
+// (WebRTC, our own produceRtp) stop sending during silence apart from a
+// comfort-noise refresh every ~400ms, and a paused mediasoup producer sends
+// nothing at all, so without a cap a muted speaker came back as one burst of
+// PLC frames covering the whole mute (GH hilokal#9382). Anything past the cap
+// is reported as a discontinuity on the next real frame and not synthesized.
+#define MAX_CONCEALMENT_MS 3000
+
+// Gap histogram buckets for the decode summary: at or under the DTX refresh
+// cadence, a pause, or a mute.
+#define GAP_BUCKET_DTX_MS 400
+#define GAP_BUCKET_PAUSE_MS 5000
+
 // Copied from libavcodec/libopus.c
 static int ff_opus_error_to_averror(int err) {
   switch (err) {
@@ -75,6 +88,13 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   int64_t total_samples_decoded = 0;
   int64_t total_packets_decoded = 0;
   int64_t total_missing_frames = 0;
+  int64_t total_gaps = 0;
+  int64_t gaps_dtx = 0;
+  int64_t gaps_pause = 0;
+  int64_t gaps_mute = 0;
+  int64_t total_discontinuities = 0;
+  int64_t total_skipped_samples = 0;
+  bool pending_discontinuity = false;
   int last_frame_size = opus_samples_per_frame;
 
   AVPacket *pkt_clone = av_packet_alloc();
@@ -138,7 +158,34 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         // PTS is at 48kHz, frame_size is at decode sample rate
         int64_t pts_gap = pkt_pts - expected_pts;
         int64_t pts_per_frame = last_frame_size * pts_scale;
-        int missing_frames = (int)(pts_gap / pts_per_frame);
+        int64_t missing_frames_total = pts_gap / pts_per_frame;
+        int64_t max_concealed_frames = (int64_t)MAX_CONCEALMENT_MS * OUTPUT_SAMPLE_RATE / 1000 / pts_per_frame;
+        if (max_concealed_frames < 1) {
+          max_concealed_frames = 1;
+        }
+        int missing_frames = (int)(missing_frames_total < max_concealed_frames ? missing_frames_total : max_concealed_frames);
+
+        if (missing_frames_total > 0) {
+          total_gaps++;
+          int64_t gap_ms = pts_gap * 1000 / OUTPUT_SAMPLE_RATE;
+          if (gap_ms <= GAP_BUCKET_DTX_MS) {
+            gaps_dtx++;
+          } else if (gap_ms <= GAP_BUCKET_PAUSE_MS) {
+            gaps_pause++;
+          } else {
+            gaps_mute++;
+          }
+        }
+
+        if (missing_frames_total > max_concealed_frames) {
+          // Too long to conceal: fill the cap, then skip to the packet. Reset
+          // the decoder so the first real frame is not predicted from a state
+          // that has been fading for seconds.
+          total_discontinuities++;
+          total_skipped_samples += (pts_gap - missing_frames * pts_per_frame) / pts_scale;
+          pending_discontinuity = true;
+          opus_decoder_ctl(opus_decoder, OPUS_RESET_STATE);
+        }
 
         if (missing_frames > 0) {
           total_missing_frames += missing_frames;
@@ -169,6 +216,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
                 audio_buffer.len = frame_size * sizeof(int16_t);
                 // PTS for recovered frames: interpolate from expected_pts
                 audio_buffer.pts = expected_pts + (i * last_frame_size * pts_scale);
+                audio_buffer.discontinuity = false;
+                audio_buffer.concealed = true;
                 send_callback_for_many(buffer_ready_async, &audio_buffer);
               }
             }
@@ -201,9 +250,12 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           memcpy(audio_buffer.buf, decoder_output, frame_size * sizeof(int16_t));
           audio_buffer.len = frame_size * sizeof(int16_t);
           audio_buffer.pts = pkt_pts;
+          audio_buffer.discontinuity = pending_discontinuity;
+          audio_buffer.concealed = pkt->size <= DTX_PACKET_MAX_BYTES;
           send_callback_for_many(buffer_ready_async, &audio_buffer);
         }
       }
+      pending_discontinuity = false;
 
       av_packet_free(&pkt);
     } else if (thread_message.type == POST_START_TIME_REALTIME) {
@@ -222,11 +274,18 @@ cleanup_thread:
   // Log decoding summary
   if (total_packets_decoded > 0) {
     double total_duration_sec = (double)total_samples_decoded / opus_sample_rate;
-    printf("Opus decode finished: %lld packets, %lld samples (%.2f sec), %lld missing frames recovered\n",
+    printf("Opus decode finished: %lld packets, %lld samples (%.2f sec), %lld missing frames recovered, "
+           "%lld gaps (%lld <=%dms, %lld <=%ds, %lld longer), %lld discontinuities skipping %.2f sec\n",
            (long long)total_packets_decoded,
            (long long)total_samples_decoded,
            total_duration_sec,
-           (long long)total_missing_frames);
+           (long long)total_missing_frames,
+           (long long)total_gaps,
+           (long long)gaps_dtx, GAP_BUCKET_DTX_MS,
+           (long long)gaps_pause, GAP_BUCKET_PAUSE_MS / 1000,
+           (long long)gaps_mute,
+           (long long)total_discontinuities,
+           (double)total_skipped_samples / opus_sample_rate);
   }
 
   avcodec_parameters_free(&codecpar);

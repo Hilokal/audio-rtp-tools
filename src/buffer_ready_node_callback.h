@@ -10,6 +10,13 @@ struct AudioBuffer {
 
   // Presentation timestamp in samples (at source sample rate)
   int64_t pts;
+
+  // True on the first frame after a timestamp gap too long to conceal: the
+  // audio before it ends more than the concealment cap earlier in the stream.
+  bool discontinuity;
+
+  // True when the decoder synthesized the frame (PLC/FEC or a DTX packet).
+  bool concealed;
 };
 
 napi_status init_callback_for_many(napi_env env, napi_value on_buffer_ready_callback, uv_async_t **async);
