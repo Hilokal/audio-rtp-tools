@@ -193,24 +193,6 @@ export function produceRtp(options: ProduceOptions): ProduceReturn {
     return promise;
   }
 
-  if (signal) {
-    function listener() {
-      native.clearMessageQueue(external);
-      native.postClearProducerQueue(external);
-    }
-
-    signal.addEventListener("abort", listener, { once: true });
-
-    promise.then(
-      () => {
-        signal.removeEventListener("abort", listener);
-      },
-      () => {
-        /* Ignoring error. Just don't want a danging promise */
-      },
-    );
-  }
-
   if (options.keepAlive !== false) {
     // The producer thread only emits a keep-alive if the stream has actually
     // been quiet, so ticking blindly here is safe.

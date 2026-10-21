@@ -142,9 +142,9 @@ int post_flush_encoder_to_thread(AVThreadMessageQueue *mq) {
   return av_thread_message_queue_send(mq, &thread_message, AV_THREAD_MESSAGE_NONBLOCK);
 }
 
-int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq) {
+int post_abort_signal_to_thread(AVThreadMessageQueue *mq) {
   ThreadMessage thread_message = {
-    .type = CLEAR_PRODUCER_QUEUE,
+    .type = ABORT_SIGNAL,
     .param = {
       .pkt = NULL
     },

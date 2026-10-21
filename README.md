@@ -314,7 +314,7 @@ All audio processing runs on native pthreads, completely off the Node.js event l
 - **Decoder thread**: Receives RTP via SDP, decodes Opus to PCM with libopus, resamples to the requested output sample rate, and delivers audio buffers back to JavaScript via a `uv_async_t` callback.
 - **Save audio thread**: Receives RTP via SDP and muxes the Opus packets directly into a container file (WebM) without decoding. Uses the same demuxer as the decoder thread, with a custom `interrupt_callback` that only fires on shutdown — so muted speakers don't kill the recording.
 
-Communication between JavaScript and native threads uses FFmpeg's `AVThreadMessageQueue`. Lifecycle is managed through `AbortController` — aborting sends `AVERROR_EOF` on the message queue, which causes the thread to exit cleanly and resolve its JavaScript promise.
+Communication between JavaScript and native threads uses FFmpeg's `AVThreadMessageQueue`. Lifecycle is managed through `AbortController` — aborting flushes the message queue, posts an `ABORT_SIGNAL` message, and then sends `AVERROR_EOF` on the queue, which causes the thread to exit cleanly and resolve its JavaScript promise. Threads that pace output downstream use the message to tell an abort from a normal end: `produceRtp()` drops the producer thread's queued packets on abort rather than playing them out in real time.
 
 ### Backpressure
 

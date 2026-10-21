@@ -27,8 +27,11 @@ enum ThreadMessageType {
   // Flush remaining PCM in the encoder accumulator, then reset PTS
   FLUSH_OPUS_ENCODER,
 
-  // Drain the producer thread's packet queue
-  CLEAR_PRODUCER_QUEUE,
+  // Posted by the abort signal handler, after flushing the queue and before
+  // closing it with AVERROR_EOF, so a thread can tell an abort (drop what is
+  // queued downstream) from a normal end (send it). Threads with nothing to
+  // drop ignore it.
+  ABORT_SIGNAL,
 
   // Periodic nudge from the JS event loop. The producer thread emits a DTX
   // keep-alive packet if the output has been quiet long enough.
@@ -63,7 +66,7 @@ int post_set_fec_to_thread(AVThreadMessageQueue *mq, bool enable);
 int post_set_packet_loss_perc_to_thread(AVThreadMessageQueue *mq, int32_t percent);
 int post_set_dtx_to_thread(AVThreadMessageQueue *mq, bool enable);
 int post_flush_encoder_to_thread(AVThreadMessageQueue *mq);
-int post_clear_producer_queue_to_thread(AVThreadMessageQueue *mq);
+int post_abort_signal_to_thread(AVThreadMessageQueue *mq);
 int post_keep_alive_tick_to_thread(AVThreadMessageQueue *mq);
 
 

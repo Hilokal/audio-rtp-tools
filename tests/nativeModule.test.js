@@ -95,23 +95,34 @@ async function runProducer({
   return { done: producer.done, drainCount };
 }
 
-it("aborts a producer thread", async () => {
-  const rtpParameters = createRtpParameters();
-  const srtpParameters = createSrtpParameters();
+it(
+  "aborts a producer thread",
+  async () => {
+    const rtpParameters = createRtpParameters();
+    const srtpParameters = createSrtpParameters();
 
-  const abortController = new AbortController();
+    const abortController = new AbortController();
 
-  const { done } = await runProducer({
-    rtpParameters,
-    srtpParameters,
-    signal: abortController.signal,
-  });
+    const { done } = await runProducer({
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+    });
 
-  abortController.abort();
+    // Give the encoder time to hand the backlog to the producer thread, which
+    // paces it out in real time. The abort has to drop those packets too, not
+    // only the PCM still waiting in the encoder queue.
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
-  // This should abort right away
-  await done();
-});
+    const abortedAt = Date.now();
+    abortController.abort();
+
+    // This should abort right away, not after the queued audio has played out.
+    await done();
+    expect(Date.now() - abortedAt).toBeLessThan(1000);
+  },
+  10 * 1000,
+);
 
 it(
   "starts an audio encode/decode thread",

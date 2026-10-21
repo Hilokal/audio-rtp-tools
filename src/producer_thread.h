@@ -39,4 +39,4 @@ int start_producer_thread_raw(
   ProducerThreadData **thread_data
 );
 
-int stop_producer_thread_raw(ProducerThreadData *thread_data);
+int stop_producer_thread_raw(ProducerThreadData *thread_data, bool immediate);

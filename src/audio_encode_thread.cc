@@ -72,6 +72,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   int64_t total_frames_encoded = 0;
   int64_t total_frames_dtx_suppressed = 0;
   bool dtx_enabled = params.enableDtx;
+  // ABORT_SIGNAL was received: drop the producer's queued packets on exit
+  // instead of letting it send them.
+  bool aborted = false;
 
   //
   // Start producer thread with RTP parameters
@@ -207,7 +210,8 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
           // Post to producer thread (blocking — safe since we're on a dedicated pthread)
           int post_ret = post_packet_to_thread(producer_thread->message_queue, pkt, 0);
-          if (post_ret < 0) {
+          // EOF means the producer was aborted while this packet was in flight.
+          if (post_ret < 0 && post_ret != AVERROR_EOF) {
             fprintf(stderr, "audio_encode_thread: post_packet_to_thread failed [%d]\n", post_ret);
           }
 
@@ -261,10 +265,12 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
         accum_pos = 0;
       }
       pts = 0;
-    } else if (thread_message.type == CLEAR_PRODUCER_QUEUE) {
-      if (producer_thread != NULL) {
-        av_thread_message_flush(producer_thread->message_queue);
-      }
+    } else if (thread_message.type == ABORT_SIGNAL) {
+      // The queue was flushed before this was posted and closed after it, so
+      // there is nothing left to read.
+      aborted = true;
+      ret = 0;
+      goto cleanup;
     } else if (thread_message.type == KEEP_ALIVE_TICK) {
       if (producer_thread != NULL) {
         post_keep_alive_tick_to_thread(producer_thread->message_queue);
@@ -292,7 +298,17 @@ cleanup:
           (long long)total_frames_dtx_suppressed);
 
   if (producer_thread != NULL) {
-    int producer_ret = stop_producer_thread_raw(producer_thread);
+    // Known gap: an abort that arrives after end() has already brought us
+    // here is not noticed. The abort handler does post ABORT_SIGNAL to our
+    // queue (it reopens the send side that end() closed), but nothing reads
+    // the queue once we are blocked in the join below, so the producer
+    // drains its backlog at real-time pace first: up to PRODUCER_QUEUE_SIZE
+    // packets, about 5 seconds. An abort that lands while we are still in
+    // the main loop, including while blocked posting to a full producer
+    // queue, is handled. Closing this would mean keeping the queue read
+    // during the drain, e.g. by blocking in recv() until either
+    // ABORT_SIGNAL or a message from the producer saying it has finished.
+    int producer_ret = stop_producer_thread_raw(producer_thread, aborted);
     if (producer_ret != 0) {
       fprintf(stderr, "audio_encode_thread: producer thread returned error [%d]\n", producer_ret);
     }

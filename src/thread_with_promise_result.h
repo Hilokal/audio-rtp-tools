@@ -92,6 +92,17 @@ static napi_value abort_signal_handler(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
+  // Drop whatever is still queued, then leave ABORT_SIGNAL as the only thing
+  // the thread reads before AVERROR_EOF. The send side may already be closed
+  // by an earlier end(), so reopen it for the post. This runs on the JS
+  // thread, so nothing else from JS can slip in between.
+  av_thread_message_flush(message_queue);
+  av_thread_message_queue_set_err_send(message_queue, 0);
+  int ret = post_abort_signal_to_thread(message_queue);
+  if (ret < 0) {
+    // The thread will still exit on EOF; it just cannot tell this from end().
+    fprintf(stderr, "abort_signal_handler: failed to post ABORT_SIGNAL [%d]\n", ret);
+  }
   av_thread_message_queue_set_err_send(message_queue, AVERROR_EOF);
   av_thread_message_queue_set_err_recv(message_queue, AVERROR_EOF);
   return NULL;

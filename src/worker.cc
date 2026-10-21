@@ -670,22 +670,6 @@ namespace hilokal {
     return NULL;
   }
 
-  napi_value postClearProducerQueue(napi_env env, napi_callback_info cbinfo) {
-    size_t argsLength = 1;
-    napi_value args[1];
-    napi_status status = napi_ok;
-
-    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
-    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
-
-    AVThreadMessageQueue *message_queue;
-    status = napi_get_value_external(env, args[0], (void **)&message_queue);
-    if (status != napi_ok) { GET_AND_THROW_LAST_ERROR(env); return NULL; }
-
-    post_clear_producer_queue_to_thread(message_queue);
-    return NULL;
-  }
-
   napi_value postKeepAliveTick(napi_env env, napi_callback_info cbinfo) {
     size_t argsLength = 1;
     napi_value args[1];
@@ -839,8 +823,6 @@ namespace hilokal {
     status = create_function_property(env, exports, "postFlushEncoder", postFlushEncoder);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
-    status = create_function_property(env, exports, "postClearProducerQueue", postClearProducerQueue);
-    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "postKeepAliveTick", postKeepAliveTick);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);

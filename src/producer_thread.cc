@@ -327,13 +327,17 @@ int start_producer_thread_raw(
   return 0;
 }
 
-int stop_producer_thread_raw(ProducerThreadData *thread_data) {
+int stop_producer_thread_raw(ProducerThreadData *thread_data, bool immediate) {
   if (thread_data == NULL) {
     return 0;
   }
 
   av_thread_message_queue_set_err_send(thread_data->message_queue, AVERROR_EOF);
   av_thread_message_queue_set_err_recv(thread_data->message_queue, AVERROR_EOF);
+
+  if (immediate) {
+    av_thread_message_flush(thread_data->message_queue);
+  }
 
   void *value = NULL;
   int ret = pthread_join(thread_data->thread, &value);

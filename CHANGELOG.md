@@ -6,6 +6,7 @@
 - `onAudioData` receives a `discontinuity: boolean` field: true on the first frame after a gap that exceeded the cap, false otherwise (additive; existing callers are unaffected).
 - `onAudioData` receives a `concealed: boolean` field: true for frames the decoder synthesized rather than decoded from audio the sender sent (PLC or FEC filling a timestamp gap, and DTX / keep-alive packets of 2 bytes or less), false otherwise (additive; existing callers are unaffected). During Opus DTX silence this separates the ~400 ms comfort-noise refreshes, which carry the sender's real background, from the concealment around them.
 - The decode summary line reports a gap histogram (up to 400 ms, up to 5 s, longer) and the total time skipped.
+- Aborting the `signal` passed to `produceRtp()` now drops the packets already queued for sending, so `done()` resolves right away, including when `end()` was called first. Previously only unencoded PCM was dropped: the request to clear the producer thread's queue was posted through the encoder's message queue after the abort had closed it, so it never arrived and queued audio played out in real time. The abort handler now flushes the queue and posts an `ABORT_SIGNAL` message before closing it.
 
 ## [1.4.0] - 2026-08-14
 
