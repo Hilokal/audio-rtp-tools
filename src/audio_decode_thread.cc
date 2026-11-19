@@ -84,6 +84,27 @@ static bool packet_has_fec(const unsigned char *data, opus_int32 len) {
   return lbrr;
 }
 
+// How many samples at the end of a gap's last frame opus_decode() recovers from
+// the next packet's FEC when called with decode_fec=1 for frame_size samples.
+// The rest of the frame, or all of it when this returns 0, is PLC. The FEC flag
+// alone does not settle it, because libopus only uses the FEC data when:
+//  - the decoder's previous packet was not CELT-only, and
+//  - the packet's frame is no longer than the frame requested. A shorter one
+//    is recovered into the tail, behind PLC for the remainder.
+// A 40 or 60ms SILK frame can carry FEC for only some of its 20ms sub-frames;
+// that is not told apart here, so such a frame counts as recovered in full.
+static int fec_samples_recovered(const unsigned char *data, opus_int32 len, int frame_size, int sample_rate, bool prev_packet_celt_only) {
+  if (prev_packet_celt_only || !packet_has_fec(data, len)) {
+    return 0;
+  }
+
+  int packet_frame_size = opus_packet_get_samples_per_frame(data, sample_rate);
+  if (packet_frame_size > frame_size) {
+    return 0;
+  }
+  return packet_frame_size;
+}
+
 static size_t secondsToPacketCount(double seconds) {
   return (size_t)(seconds / 0.02);
 }
@@ -128,6 +149,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   int64_t total_skipped_samples = 0;
   bool pending_discontinuity = false;
   int last_frame_size = opus_samples_per_frame;
+  // Whether the last packet given to the decoder was CELT-only, which decides
+  // if FEC in the packet after a gap can be used (see fec_samples_recovered)
+  bool last_packet_celt_only = false;
 
   AVPacket *pkt_clone = av_packet_alloc();
   if (pkt_clone == NULL) {
@@ -217,6 +241,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           total_skipped_samples += (pts_gap - missing_frames * pts_per_frame) / pts_scale;
           pending_discontinuity = true;
           opus_decoder_ctl(opus_decoder, OPUS_RESET_STATE);
+          last_packet_celt_only = false;
         }
 
         if (missing_frames > 0) {
@@ -225,12 +250,13 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           // Decode missing frames using packet loss concealment
           for (int i = 0; i < missing_frames; i++) {
             int frame_size;
-            // Whether the frame is PLC, as opposed to audio recovered from FEC
-            bool is_plc = true;
+            // Samples at the end of the frame that are audio recovered from
+            // FEC; everything before them is PLC
+            int fec_samples = 0;
             if (i == missing_frames - 1) {
               // Last missing frame: use FEC from current packet if available.
-              // Without FEC in the packet, libopus falls back to PLC.
-              is_plc = !packet_has_fec(pkt->data, pkt->size);
+              // Where libopus cannot use it, it falls back to PLC.
+              fec_samples = fec_samples_recovered(pkt->data, pkt->size, last_frame_size, opus_sample_rate, last_packet_celt_only);
               frame_size = opus_decode(opus_decoder, pkt->data, pkt->size, decoder_output, last_frame_size, 1);
             } else {
               // Earlier missing frames: use PLC (NULL packet)
@@ -245,9 +271,11 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
             // The decoder still ran PLC above, which keeps its state in step
             // with the stream for the next real packet; only the output is
             // replaced.
-            if (conceal_with_silence && is_plc) {
-              memset(decoder_output, 0, frame_size * sizeof(int16_t));
-              total_silenced_frames++;
+            if (conceal_with_silence && fec_samples < frame_size) {
+              memset(decoder_output, 0, (frame_size - fec_samples) * sizeof(int16_t));
+              if (fec_samples == 0) {
+                total_silenced_frames++;
+              }
             }
 
             total_samples_decoded += frame_size;
@@ -279,6 +307,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       }
 
       last_frame_size = frame_size;
+      last_packet_celt_only = pkt->size > 0 && (pkt->data[0] & 0x80);
       total_samples_decoded += frame_size;
       total_packets_decoded++;
 

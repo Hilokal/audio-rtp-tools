@@ -399,11 +399,13 @@ it(
 );
 
 it.each([
-  ["plc", 9040],
-  ["silence", 9042],
+  ["plc", "without FEC", 9040],
+  ["silence", "without FEC", 9042],
+  ["silence", "with FEC", 9044],
 ])(
-  "fills gaps and keep-alive packets according to concealment: %s",
-  async (concealment, rtpPort) => {
+  "fills gaps and keep-alive packets according to concealment: %s, %s",
+  async (concealment, fecMode, rtpPort) => {
+    const withFec = fecMode === "with FEC";
     const GAP_MS = 1500;
     const SEGMENT_MS = 1000;
 
@@ -441,7 +443,8 @@ it.each([
     });
 
     // Keep-alives stay on, so the gap reaches the decoder both ways: as
-    // missing timestamps and as 1-byte DTX packets.
+    // missing timestamps and as 1-byte DTX packets. The encoder only adds FEC
+    // to its packets when it is told to expect loss.
     const producer = produceRtp({
       ipAddress: "127.0.0.1",
       rtpPort,
@@ -450,6 +453,7 @@ it.each([
       srtpParameters,
       signal: abortController.signal,
       sampleRate: encodeSampleRate,
+      opus: { bitrate: null, packetLossPercent: withFec ? 20 : 0 },
       onError: (error) => {
         console.log("producer error", error);
       },
@@ -492,9 +496,16 @@ it.each([
     expect(real.filter((f) => f.silent).length).toBeLessThan(real.length / 10);
 
     const audibleConcealed = concealed.filter((f) => !f.silent);
-    if (concealment === "silence") {
-      // No FEC is in play here (the encoder only adds it when told to expect
-      // packet loss), so nothing synthesized is left audible.
+    if (concealment === "silence" && withFec) {
+      // The first packet of the second segment carries FEC for the frame the
+      // encoder produced before it, so the last frame of the gap is recovered
+      // audio and is kept; the rest of the gap is silence.
+      expect(audibleConcealed).toHaveLength(1);
+      const kept = frames.indexOf(audibleConcealed[0]);
+      expect(frames[kept - 1].concealed).toBe(true);
+      expect(frames[kept + 1].concealed).toBe(false);
+    } else if (concealment === "silence") {
+      // Without FEC nothing synthesized is left audible.
       expect(audibleConcealed).toHaveLength(0);
     } else {
       expect(audibleConcealed.length).toBeGreaterThan(concealed.length / 2);

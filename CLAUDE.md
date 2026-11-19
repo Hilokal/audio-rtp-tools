@@ -54,7 +54,7 @@ Key constants: output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes. Inpu
 
 Receives RTP via SDP, decodes Opus to PCM, delivers audio data back to JS via a `uv_async_t` buffer-ready callback.
 
-Timestamp gaps are filled frame by frame (capped at `MAX_CONCEALMENT_MS`): PLC for every missing frame except the last, which is decoded from the next packet's in-band FEC when `packet_has_fec()` says it carries any. The `concealment: "silence"` option (`concealWithSilence` in the native params) still runs the decoder for those frames, to keep its state in step, but zeroes the output of PLC frames and of DTX / keep-alive packets; FEC-recovered frames are left alone.
+Timestamp gaps are filled frame by frame (capped at `MAX_CONCEALMENT_MS`): PLC for every missing frame except the last, which is decoded with `decode_fec=1` from the next packet; libopus recovers it from that packet's in-band FEC when it can and falls back to PLC otherwise. `fec_samples_recovered()` predicts which of the two happened (FEC flag set, previous packet not CELT-only, packet frame no longer than the frame requested; a shorter packet frame only recovers the tail). The `concealment: "silence"` option (`concealWithSilence` in the native params) still runs the decoder for those frames, to keep its state in step, but zeroes the PLC samples and the output of DTX / keep-alive packets; FEC-recovered samples are left alone.
 
 ### Producer thread (`src/producer_thread.cc`)
 
