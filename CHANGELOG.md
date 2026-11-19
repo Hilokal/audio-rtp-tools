@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- `consumeRtp()` accepts `concealment: "plc" | "silence"` (default `"plc"`, the existing behavior). With `"silence"`, frames the decoder would synthesize (PLC for a timestamp gap, comfort noise for DTX / keep-alive packets) are delivered as zeros, which suits speech-to-text models. Frames recovered from in-band FEC are kept as audio. Frame timing and the `concealed` / `discontinuity` flags are unchanged.
+- The decode summary line reports how many frames were delivered as silence.
+
 ## [1.5.0] - 2026-10-20
 
 - `consumeRtp()` caps packet-loss concealment at 3 seconds per RTP timestamp gap. Previously every missing frame was synthesized, so a speaker returning from a long DTX silence or a paused producer arrived as one burst of concealed frames covering the whole gap (hours, in production). Gaps longer than the cap now skip to the next packet with the decoder state reset.

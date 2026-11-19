@@ -54,6 +54,36 @@ static int ff_opus_error_to_averror(int err) {
   }
 }
 
+// Whether an Opus packet carries in-band FEC (LBRR) for the frame before it.
+// libopus has this as opus_packet_has_lbrr(), but only exports it from 1.5 on,
+// so it is reimplemented here on the public packet API.
+static bool packet_has_fec(const unsigned char *data, opus_int32 len) {
+  if (data == NULL || len < 1) {
+    return false;
+  }
+
+  // CELT-only packets have no LBRR
+  if (data[0] & 0x80) {
+    return false;
+  }
+
+  const unsigned char *frames[48];
+  opus_int16 sizes[48];
+  if (opus_packet_parse(data, len, NULL, frames, sizes, NULL) <= 0 || sizes[0] == 0) {
+    return false;
+  }
+
+  // The first SILK frame starts with one VAD flag per 20ms SILK frame, then
+  // the LBRR flag, for the mid channel and then (in stereo) the side channel.
+  int samples_per_frame = opus_packet_get_samples_per_frame(data, 48000);
+  int silk_frames = samples_per_frame > 960 ? samples_per_frame / 960 : 1;
+  bool lbrr = (frames[0][0] >> (7 - silk_frames)) & 0x1;
+  if (opus_packet_get_nb_channels(data) == 2) {
+    lbrr = lbrr || ((frames[0][0] >> (6 - 2 * silk_frames)) & 0x1);
+  }
+  return lbrr;
+}
+
 static size_t secondsToPacketCount(double seconds) {
   return (size_t)(seconds / 0.02);
 }
@@ -69,6 +99,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   const int opus_channels = thread_data.channels;
   const int opus_samples_per_frame = opus_sample_rate * OPUS_FRAME_DURATION_MS / 1000;
   const int pts_scale = OUTPUT_SAMPLE_RATE / opus_sample_rate;
+  const bool conceal_with_silence = thread_data.concealWithSilence;
 
   ThreadMessage thread_message;
 
@@ -88,6 +119,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   int64_t total_samples_decoded = 0;
   int64_t total_packets_decoded = 0;
   int64_t total_missing_frames = 0;
+  int64_t total_silenced_frames = 0;
   int64_t total_gaps = 0;
   int64_t gaps_dtx = 0;
   int64_t gaps_pause = 0;
@@ -193,8 +225,12 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           // Decode missing frames using packet loss concealment
           for (int i = 0; i < missing_frames; i++) {
             int frame_size;
+            // Whether the frame is PLC, as opposed to audio recovered from FEC
+            bool is_plc = true;
             if (i == missing_frames - 1) {
-              // Last missing frame: use FEC from current packet if available
+              // Last missing frame: use FEC from current packet if available.
+              // Without FEC in the packet, libopus falls back to PLC.
+              is_plc = !packet_has_fec(pkt->data, pkt->size);
               frame_size = opus_decode(opus_decoder, pkt->data, pkt->size, decoder_output, last_frame_size, 1);
             } else {
               // Earlier missing frames: use PLC (NULL packet)
@@ -204,6 +240,14 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
             if (frame_size < 0) {
               fprintf(stderr, "opus_decode error during PLC: %s\n", opus_strerror(frame_size));
               continue;
+            }
+
+            // The decoder still ran PLC above, which keeps its state in step
+            // with the stream for the next real packet; only the output is
+            // replaced.
+            if (conceal_with_silence && is_plc) {
+              memset(decoder_output, 0, frame_size * sizeof(int16_t));
+              total_silenced_frames++;
             }
 
             total_samples_decoded += frame_size;
@@ -238,6 +282,14 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
       total_samples_decoded += frame_size;
       total_packets_decoded++;
 
+      // DTX / keep-alive packets carry no audio; libopus decodes them as
+      // concealment (comfort noise).
+      const bool pkt_concealed = pkt->size <= DTX_PACKET_MAX_BYTES;
+      if (conceal_with_silence && pkt_concealed) {
+        memset(decoder_output, 0, frame_size * sizeof(int16_t));
+        total_silenced_frames++;
+      }
+
       // Update expected PTS for next packet
       // frame_size is at decode sample rate, PTS is at 48kHz
       expected_pts = pkt_pts + (frame_size * pts_scale);
@@ -251,7 +303,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
           audio_buffer.len = frame_size * sizeof(int16_t);
           audio_buffer.pts = pkt_pts;
           audio_buffer.discontinuity = pending_discontinuity;
-          audio_buffer.concealed = pkt->size <= DTX_PACKET_MAX_BYTES;
+          audio_buffer.concealed = pkt_concealed;
           send_callback_for_many(buffer_ready_async, &audio_buffer);
         }
       }
@@ -275,7 +327,8 @@ cleanup_thread:
   if (total_packets_decoded > 0) {
     double total_duration_sec = (double)total_samples_decoded / opus_sample_rate;
     printf("Opus decode finished: %lld packets, %lld samples (%.2f sec), %lld missing frames recovered, "
-           "%lld gaps (%lld <=%dms, %lld <=%ds, %lld longer), %lld discontinuities skipping %.2f sec\n",
+           "%lld gaps (%lld <=%dms, %lld <=%ds, %lld longer), %lld discontinuities skipping %.2f sec, "
+           "%lld frames delivered as silence\n",
            (long long)total_packets_decoded,
            (long long)total_samples_decoded,
            total_duration_sec,
@@ -285,7 +338,8 @@ cleanup_thread:
            (long long)gaps_pause, GAP_BUCKET_PAUSE_MS / 1000,
            (long long)gaps_mute,
            (long long)total_discontinuities,
-           (double)total_skipped_samples / opus_sample_rate);
+           (double)total_skipped_samples / opus_sample_rate,
+           (long long)total_silenced_frames);
   }
 
   avcodec_parameters_free(&codecpar);

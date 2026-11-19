@@ -106,6 +106,13 @@ type ConsumeOptions = {
   // Must be one of 8000, 12000, 16000, 24000, 48000
   sampleRate: number;
 
+  // What to deliver for frames the sender sent no audio for. "plc" (default)
+  // delivers Opus packet-loss concealment and DTX comfort noise. "silence"
+  // delivers zeros for those frames instead, which suits speech-to-text
+  // models; frames recovered from FEC are real audio and are kept. Timing,
+  // pts and the concealed / discontinuity flags are the same in both modes.
+  concealment?: "plc" | "silence";
+
   signal: AbortSignal;
 };
 
@@ -401,6 +408,13 @@ function sdpParameters(parameters: Record<string, unknown>): string {
 }
 
 export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
+  const concealment = options.concealment ?? "plc";
+  if (concealment !== "plc" && concealment !== "silence") {
+    throw new TypeError(
+      `consumeRtp: concealment must be "plc" or "silence", got ${JSON.stringify(concealment)}`,
+    );
+  }
+
   const { promise } = native.startAudioDecodeThread(
     dataUrl(options.sdp),
     options.onAudioData,
@@ -408,6 +422,7 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     {
       sampleRate: options.sampleRate,
       channels: 1,
+      concealWithSilence: concealment === "silence",
     },
   );
 

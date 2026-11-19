@@ -8,6 +8,10 @@ struct AudioDecodeThreadParams {
   // TODO: These are currently ignored by the decoder
   int32_t sampleRate;   // Output sample rate (e.g., 24000 for OpenAI)
   int32_t channels;     // Output channels (e.g., 1 for mono)
+
+  // Deliver silence in place of synthesized audio (PLC, and the comfort noise
+  // decoded from DTX / keep-alive packets). FEC-recovered frames are kept.
+  bool concealWithSilence;
 };
 
 napi_status start_audio_decode_thread(

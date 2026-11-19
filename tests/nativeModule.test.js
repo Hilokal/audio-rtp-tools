@@ -398,6 +398,111 @@ it(
   20 * 1000,
 );
 
+it.each([
+  ["plc", 9040],
+  ["silence", 9042],
+])(
+  "fills gaps and keep-alive packets according to concealment: %s",
+  async (concealment, rtpPort) => {
+    const GAP_MS = 1500;
+    const SEGMENT_MS = 1000;
+
+    const rtpParameters = createRtpParameters();
+    const srtpParameters = createSrtpParameters();
+
+    const sdp = createSDP({
+      subject: "Concealment Mode Test",
+      rtpParameters,
+      originIpAddress: "127.0.0.1",
+      destinationIpAddress: "127.0.0.1",
+      rtpPort,
+      rtcpPort: rtpPort + 1,
+      srtpParameters,
+    });
+
+    const abortController = new AbortController();
+
+    const frames = [];
+    const consumer = consumeRtp({
+      sdp,
+      sampleRate: decodeSampleRate,
+      concealment,
+      signal: abortController.signal,
+      onAudioData: ({ buffer, concealed }) => {
+        frames.push({
+          concealed,
+          bytes: buffer.byteLength,
+          silent: buffer.every((byte) => byte === 0),
+        });
+      },
+      onError: (error) => {
+        console.log("consumer error", error);
+      },
+    });
+
+    // Keep-alives stay on, so the gap reaches the decoder both ways: as
+    // missing timestamps and as 1-byte DTX packets.
+    const producer = produceRtp({
+      ipAddress: "127.0.0.1",
+      rtpPort,
+      rtcpPort: rtpPort + 1,
+      rtpParameters,
+      srtpParameters,
+      signal: abortController.signal,
+      sampleRate: encodeSampleRate,
+      onError: (error) => {
+        console.log("producer error", error);
+      },
+    });
+
+    const pcmData = fs.readFileSync(
+      path.join(__dirname, "LJ025-0076_24k_mono.wav"),
+    ).subarray(44);
+    const segment = pcmData.subarray(0, (encodeSampleRate * SEGMENT_MS * 2) / 1000);
+    const writeSegment = () => {
+      const chunkSize = 960;
+      for (let offset = 0; offset < segment.length; offset += chunkSize) {
+        producer.write(segment.subarray(offset, offset + chunkSize));
+      }
+    };
+
+    // The producer paces the segment out in real time, so the gap starts
+    // SEGMENT_MS after the write.
+    writeSegment();
+    producer.endSegment();
+    await new Promise((resolve) => setTimeout(resolve, SEGMENT_MS + GAP_MS));
+    writeSegment();
+    producer.end();
+    await producer.done();
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    abortController.abort();
+    await consumer.done();
+
+    const sumMs = (list) => decodedBytesToMs(list.reduce((sum, f) => sum + f.bytes, 0));
+    const concealed = frames.filter((f) => f.concealed);
+    const real = frames.filter((f) => !f.concealed);
+
+    // The mode changes what the concealed frames contain, not how many there
+    // are or how long the stream is.
+    expect(sumMs(frames)).toBeGreaterThan(2 * SEGMENT_MS + GAP_MS - 500);
+    expect(sumMs(frames)).toBeLessThan(2 * SEGMENT_MS + GAP_MS + 500);
+    expect(sumMs(concealed)).toBeGreaterThan(GAP_MS - 500);
+    expect(sumMs(real)).toBeGreaterThan(2 * SEGMENT_MS - 100);
+    expect(real.filter((f) => f.silent).length).toBeLessThan(real.length / 10);
+
+    const audibleConcealed = concealed.filter((f) => !f.silent);
+    if (concealment === "silence") {
+      // No FEC is in play here (the encoder only adds it when told to expect
+      // packet loss), so nothing synthesized is left audible.
+      expect(audibleConcealed).toHaveLength(0);
+    } else {
+      expect(audibleConcealed.length).toBeGreaterThan(concealed.length / 2);
+    }
+  },
+  20 * 1000,
+);
+
 it(
   "saves RTP audio to a webm file via saveAudio",
   async () => {

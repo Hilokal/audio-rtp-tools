@@ -54,6 +54,8 @@ Key constants: output PTS at 48kHz, 20ms frames, max opus frame 1275 bytes. Inpu
 
 Receives RTP via SDP, decodes Opus to PCM, delivers audio data back to JS via a `uv_async_t` buffer-ready callback.
 
+Timestamp gaps are filled frame by frame (capped at `MAX_CONCEALMENT_MS`): PLC for every missing frame except the last, which is decoded from the next packet's in-band FEC when `packet_has_fec()` says it carries any. The `concealment: "silence"` option (`concealWithSilence` in the native params) still runs the decoder for those frames, to keep its state in step, but zeroes the output of PLC frames and of DTX / keep-alive packets; FEC-recovered frames are left alone.
+
 ### Producer thread (`src/producer_thread.cc`)
 
 Muxes `AVPacket`s into an RTP/SRTP output stream using ffmpeg's libavformat. Has both a NAPI API (for direct JS use) and a raw pthread API (for use as a child of the encoder thread).

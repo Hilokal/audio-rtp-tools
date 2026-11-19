@@ -337,6 +337,9 @@ namespace hilokal {
     status = get_option_int32(env, args[3], "channels", &params.channels);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
+    status = get_option_bool(env, args[3], "concealWithSilence", &params.concealWithSilence);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
     if (status != napi_ok) {
       av_freep(&params.sdpBase64);
       return NULL;
