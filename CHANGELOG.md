@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.1] - 2026-11-19
 
 - `consumeRtp()` with `concealment: "silence"` no longer delivers PLC as audio in the last frame of a gap when the next packet carries FEC that libopus cannot use: after a CELT-only packet, or when the sender switched to longer frames. When the sender switched to shorter frames, only the samples the FEC covers are kept and the rest of that frame is silence. Streams with a constant frame length in SILK or hybrid mode, including everything `produceRtp()` sends, are unaffected.
 
