@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.0] - 2026-11-19
 
 - `consumeRtp()` accepts `concealment: "plc" | "silence"` (default `"plc"`, the existing behavior). With `"silence"`, frames the decoder would synthesize (PLC for a timestamp gap, comfort noise for DTX / keep-alive packets) are delivered as zeros, which suits speech-to-text models. Frames recovered from in-band FEC are kept as audio. Frame timing and the `concealed` / `discontinuity` flags are unchanged.
 - The decode summary line reports how many frames were delivered as silence.
