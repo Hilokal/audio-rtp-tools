@@ -19,6 +19,7 @@ extern "C" {
 #include "node_errors.h"
 #include "thread_messages.h"
 #include "audio_decode_thread.h"
+#include "rtp_stats.h"
 #include "audio_encode_thread.h"
 #include "save_audio_thread.h"
 #include "thread_with_promise_result.h"
@@ -304,6 +305,50 @@ namespace hilokal {
     return NULL;
   }
 
+  static void rtp_stats_finalize(napi_env env, void *finalize_data, void *finalize_hint) {
+    AVBufferRef *ref = (AVBufferRef *)finalize_data;
+    av_buffer_unref(&ref);
+  }
+
+  // Reads the counters behind the "stats" handle returned by startAudioDecodeThread
+  napi_value getRtpReceiveStats(napi_env env, napi_callback_info cbinfo) {
+    size_t argsLength = 1;
+    napi_value args[1];
+    napi_value ret;
+    napi_status status;
+
+    status = napi_get_cb_info(env, cbinfo, &argsLength, args, NULL, 0);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    void *data = NULL;
+    status = napi_get_value_external(env, args[0], &data);
+    if (status != napi_ok || data == NULL) {
+      napi_throw_type_error(env, NULL, "Expected a stats handle");
+      return NULL;
+    }
+    RtpReceiveStats *stats = rtp_stats_from_ref((AVBufferRef *)data);
+
+    status = napi_create_object(env, &ret);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    const struct { const char *name; int64_t value; } fields[] = {
+      { "packetsReceived", stats->packets_received },
+      { "packetsLost", stats->packets_lost },
+      { "packetsLate", stats->packets_late },
+      { "reorderTimeouts", stats->reorder_timeouts },
+      { "reorderQueueOverflows", stats->reorder_queue_overflows },
+    };
+    for (const auto &field : fields) {
+      napi_value js_value;
+      status = napi_create_int64(env, field.value, &js_value);
+      if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+      status = napi_set_named_property(env, ret, field.name, js_value);
+      if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+    }
+
+    return ret;
+  }
+
   napi_value startAudioDecodeThread(napi_env env, napi_callback_info cbinfo) {
     size_t argsLength = 4;
     napi_value args[4];
@@ -340,6 +385,9 @@ namespace hilokal {
     status = get_option_bool(env, args[3], "concealWithSilence", &params.concealWithSilence);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
+    status = get_option_int32(env, args[3], "maxReorderDelayMs", &params.maxReorderDelayMs);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
     if (status != napi_ok) {
       av_freep(&params.sdpBase64);
       return NULL;
@@ -349,6 +397,26 @@ namespace hilokal {
     napi_value abort_signal = args[2];
     napi_value external;
 
+    // One reference to the stats goes to the thread and one to the JS handle
+    // returned below, so JS can keep reading them after the thread has exited.
+    AVBufferRef *js_stats_ref = rtp_stats_alloc();
+    napi_value stats_external;
+    if (js_stats_ref == NULL || (params.statsRef = av_buffer_ref(js_stats_ref)) == NULL) {
+      av_buffer_unref(&js_stats_ref);
+      av_freep(&params.sdpBase64);
+      napi_throw_error(env, NULL, "Failed to allocate RTP receive stats");
+      return NULL;
+    }
+
+    status = napi_create_external(env, js_stats_ref, rtp_stats_finalize, NULL, &stats_external);
+    if (status != napi_ok) {
+      av_buffer_unref(&js_stats_ref);
+      av_buffer_unref(&params.statsRef);
+      av_freep(&params.sdpBase64);
+      GET_AND_THROW_LAST_ERROR(env);
+      return NULL;
+    }
+
     status = start_audio_decode_thread(env, params, abort_signal, on_audio_callback, &external, &promise);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
@@ -356,6 +424,9 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = napi_set_named_property(env, ret, "external", external);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = napi_set_named_property(env, ret, "stats", stats_external);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = napi_set_named_property(env, ret, "promise", promise);
@@ -750,14 +821,22 @@ namespace hilokal {
     return status;
   }
 
-  int dropped_packets = 0;
-
   void av_log_override_callback(void* ptr, int level, const char* fmt, va_list vl) {
+    // The RTP demuxer reports packet loss and reordering only through its log
+    // messages, so they are counted here, against the receiver whose thread
+    // this is (NULL for any other thread).
+    RtpReceiveStats *stats = rtp_stats_for_current_thread();
+
     // The default ffmpeg logger can get spammy with dropped packets, so we supress some log items
     if (!strcmp(fmt, "max delay reached. need to consume packet\n")) {
+      if (stats != NULL) stats->reorder_timeouts++;
       return;
     } else if (!strcmp(fmt, "RTP: dropping old packet received too late\n")) {
+      if (stats != NULL) stats->packets_late++;
       return;
+    } else if (!strcmp(fmt, "jitter buffer full\n")) {
+      if (stats != NULL) stats->reorder_queue_overflows++;
+      av_log_default_callback(ptr, level, fmt, vl);
     } else if (!strcmp(fmt, "track %d: codec frame size is not set\n")) {
       // This is a harmless warning that comes when muxing and opus stream to mp4.
       // https://superuser.com/questions/1323387/ffmpeg-error-track-x-codec-frame-size-is-not-set
@@ -765,7 +844,14 @@ namespace hilokal {
       return;
     } else if (!strcmp(fmt, "RTP: missed %d packets\n")) {
       int count = va_arg(vl, int);
-      dropped_packets += count;
+      // libavformat computes this as a 16-bit sequence difference. When the
+      // packet it releases is a stale duplicate left in the reorder queue, the
+      // difference is negative and comes out wrapped to just under 65535. A
+      // real forward gap cannot exceed 32767 (anything further is treated as
+      // an old packet), so larger values are not loss. A gap that straddles
+      // the sequence wrap is reported one short; that cannot be told apart
+      // here and is left as is.
+      if (stats != NULL && count > 0 && count <= INT16_MAX) stats->packets_lost += count;
     } else {
       av_log_default_callback(ptr, level, fmt, vl);
     }
@@ -797,6 +883,9 @@ namespace hilokal {
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "startAudioDecodeThread", startAudioDecodeThread);
+    if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
+
+    status = create_function_property(env, exports, "getRtpReceiveStats", getRtpReceiveStats);
     if (status != napi_ok) GET_AND_THROW_LAST_ERROR(env);
 
     status = create_function_property(env, exports, "startProducerJob", startProducerJob);

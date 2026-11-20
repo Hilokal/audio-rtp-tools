@@ -226,6 +226,7 @@ Receives an RTP Opus stream and decodes it to PCM.
 | `sdp` | `string` | SDP describing the RTP stream to receive |
 | `sampleRate` | `number` | Output sample rate (8000, 12000, 16000, 24000, or 48000) |
 | `concealment` | `"plc" \| "silence"?` | What to deliver for frames the sender sent no audio for: Opus packet-loss concealment (`"plc"`, the default) or silence (see [Concealment mode](#concealment-mode)) |
+| `maxReorderDelayMs` | `number?` | How long to wait for a missing or out-of-order RTP packet before moving on without it, 0 to 5000 (default `100`; see [Loss and reordering](#loss-and-reordering)) |
 | `signal` | `AbortSignal` | Abort signal to stop the consumer |
 | `onAudioData` | `(data: { buffer: Buffer; pts: number \| null; discontinuity: boolean; concealed: boolean }) => void` | Called for each decoded audio frame |
 | `onError` | `(error: Error) => void?` | Error callback (optional) |
@@ -233,6 +234,7 @@ Receives an RTP Opus stream and decodes it to PCM.
 **Returns** an object with:
 
 - **`done(): Promise<void>`** — Resolves when the thread has exited.
+- **`getStats(): ConsumeStats`** — Cumulative counters for the RTP stream (see [Loss and reordering](#loss-and-reordering)). Can be called at any time, including after `done()` has resolved.
 
 **Timestamp gaps.** When packets are lost, or the sender stops sending (Opus DTX during silence, a paused WebRTC producer), the decoder fills the missing RTP timestamps with Opus packet-loss concealment so the PCM output stays continuous, up to **3 seconds** per gap. A longer gap is not synthesized: output skips to the next packet and that frame is delivered with `discontinuity: true`, meaning the audio before it ends more than 3 seconds earlier in the stream. Short gaps carry no marker. The decode summary printed on exit counts gaps by length (up to the ~400 ms DTX refresh cadence, up to 5 s, longer) and the time skipped.
 
@@ -240,6 +242,21 @@ Receives an RTP Opus stream and decodes it to PCM.
 
 <a id="concealment-mode"></a>
 **Concealment mode.** With `concealment: "silence"`, synthesized frames are delivered as zeros instead: the PLC filling a timestamp gap, and the comfort noise libopus decodes from DTX / keep-alive packets. Use it when the PCM goes to a speech-to-text model, where concealment (which extrapolates the last speech sound, then fades into comfort noise) can be transcribed as words that were never said. The last frame of a gap is kept as audio when the decoder recovered it from in-band FEC in the packet after it, since that is the sender's real audio at a lower bitrate; it is still flagged `concealed: true`. If the sender's frame length changed across the gap, only the part of that frame the FEC covers is kept. Frame count, length, `pts`, and the `concealed` and `discontinuity` flags are the same in both modes, and so is the 3-second cap.
+
+<a id="loss-and-reordering"></a>
+**Loss and reordering.** Packets that arrive in order are passed to the decoder immediately. When one is missing, the packets after it are held for up to `maxReorderDelayMs` in case it still arrives; if it does not, the stream moves on without it, the held packets are delivered in a burst, and the decoder conceals the hole. So the setting adds latency only around a gap. The default of 100 ms suits a human listener. For a listener that can trade latency for completeness, such as a speech-to-text model, a higher value recovers more audio: an SFU (mediasoup, for one) that gets a lost packet retransmitted by the sender forwards it late, roughly one sender round trip after the gap per attempt, and it is dropped here if it misses the window. `0` turns reordering off: out-of-order packets are dropped, and the loss counters below stay at zero.
+
+`getStats()` returns what happened on the wire:
+
+| Field | Meaning |
+|-------|---------|
+| `packetsReceived` | Packets handed to the decoder. A duplicate of the packet just handed on is counted again |
+| `packetsLost` | Sequence numbers skipped: the packet never arrived, or not within `maxReorderDelayMs` |
+| `packetsLate` | Packets dropped on arrival for being older than the last one handed on. Mostly packets that came after the wait for them had run out, which are already in `packetsLost`, so this is an upper bound on the loss a longer `maxReorderDelayMs` could have recovered. It also counts an old duplicate, and every packet after the sender's sequence numbers jump backwards (a restarted sender) |
+| `reorderTimeouts` | Times the wait for a missing packet ran out |
+| `reorderQueueOverflows` | Times the reorder queue (500 packets) filled before the wait ran out |
+
+These count RTP sequence numbers, so silence suppressed by Opus DTX is not loss. `consumeRtp` does not send RTCP: no receiver reports and no NACKs, so it cannot ask the sender for a retransmission itself.
 
 ### `saveAudio(options): SaveAudioReturn`
 

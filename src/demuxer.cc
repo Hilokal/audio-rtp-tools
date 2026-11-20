@@ -34,7 +34,27 @@ struct DemuxerThreadData {
   int64_t tick_duration;
   char *sdpBase64;
   int should_reset;
+  int64_t max_delay;
+  RtpReceiveStats *stats;
 };
+
+AVBufferRef *rtp_stats_alloc() {
+  AVBufferRef *ref = av_buffer_alloc(sizeof(RtpReceiveStats));
+  if (ref != NULL) {
+    new (ref->data) RtpReceiveStats();
+  }
+  return ref;
+}
+
+static thread_local RtpReceiveStats *current_thread_stats = NULL;
+
+void rtp_stats_set_for_current_thread(RtpReceiveStats *stats) {
+  current_thread_stats = stats;
+}
+
+RtpReceiveStats *rtp_stats_for_current_thread() {
+  return current_thread_stats;
+}
 
 int stop_rtp_demuxer(DemuxerThreadData *thread_data) {
   thread_data->shutdown = 1;
@@ -250,6 +270,8 @@ int readAndWritePacket(DemuxerThreadData *thread_data, AVFormatContext *ifmt_ctx
       } else {
         goto cleanup;
       }
+    } else if (thread_data->stats != NULL) {
+      thread_data->stats->packets_received++;
     }
   }
 
@@ -398,6 +420,11 @@ int openInputForRtp(DemuxerThreadData *thread_data, AVFormatContext **ifmt_ctx) 
   }
 
   (*ifmt_ctx)->interrupt_callback.callback = interrupt_callback;
+  // How long the RTP demuxer holds later packets back while it waits for a
+  // missing one. Packets in order are never delayed.
+  if (thread_data->max_delay >= 0) {
+    (*ifmt_ctx)->max_delay = (int)thread_data->max_delay;
+  }
   (*ifmt_ctx)->protocol_whitelist = av_strdup("data,udp,rtp");
   // Don't assign the url field. avformat_open_input will do this
   // ifmt_ctx->url = sdpBase64;
@@ -473,6 +500,7 @@ void custom_io_close_input(AVFormatContext **ifmt_ctx) {
 
 static int ThreadMain(DemuxerThreadData *thread_data) {
   set_thread_name("demuxer");
+  rtp_stats_set_for_current_thread(thread_data->stats);
 
   int ret = 0;
   int stream_idx = -1;
@@ -554,7 +582,7 @@ void *ThreadMainRtp(void *opaque) {
 }
 
 
-int start_rtp_demuxer(char *sdp_base_64, int64_t tick_duration, AVThreadMessageQueue *output_message_queue, DemuxerThreadData **thread_data) {
+int start_rtp_demuxer(char *sdp_base_64, int64_t tick_duration, int64_t max_delay, RtpReceiveStats *stats, AVThreadMessageQueue *output_message_queue, DemuxerThreadData **thread_data) {
   int ret;
 
   pthread_attr_t attr;
@@ -577,6 +605,8 @@ int start_rtp_demuxer(char *sdp_base_64, int64_t tick_duration, AVThreadMessageQ
   (*thread_data)->sdpBase64 = sdp_base_64;
   (*thread_data)->output_message_queue = output_message_queue;
   (*thread_data)->tick_duration = tick_duration;
+  (*thread_data)->max_delay = max_delay;
+  (*thread_data)->stats = stats;
   (*thread_data)->mode = DEMUXER_MODE_RTP;
   (*thread_data)->shutdown = 0;
   (*thread_data)->should_tick = 0;
@@ -614,6 +644,8 @@ napi_status start_file_demuxer(napi_env env, napi_value js_output_message_queue,
   thread_data.shutdown = 0;
   thread_data.should_tick = 0;
   thread_data.should_reset = 0;
+  thread_data.max_delay = -1;
+  thread_data.stats = NULL;
   thread_data.last_tick = av_gettime_relative();
 
   size_t stack_size = get_stack_size_for_thread("DEMUXER");

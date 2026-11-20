@@ -8,6 +8,7 @@
 #include "util.h"
 #include "thread_with_promise_result.h"
 #include "time_util.h"
+#include "rtp_stats.h"
 
 extern "C" {
   #include "libavutil/time.h"
@@ -121,6 +122,9 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
   const int opus_samples_per_frame = opus_sample_rate * OPUS_FRAME_DURATION_MS / 1000;
   const int pts_scale = OUTPUT_SAMPLE_RATE / opus_sample_rate;
   const bool conceal_with_silence = thread_data.concealWithSilence;
+  const int64_t max_reorder_delay = thread_data.maxReorderDelayMs < 0 ? -1 : (int64_t)thread_data.maxReorderDelayMs * 1000;
+  AVBufferRef *stats_ref = thread_data.statsRef;
+  RtpReceiveStats *stats = rtp_stats_from_ref(stats_ref);
 
   ThreadMessage thread_message;
 
@@ -166,7 +170,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
     goto cleanup_thread;
   }
 
-  thread_ret = start_rtp_demuxer(thread_data.sdpBase64, 10 * MICROSECONDS, message_queue, &demuxer_thread);
+  thread_ret = start_rtp_demuxer(thread_data.sdpBase64, 10 * MICROSECONDS, max_reorder_delay, stats, message_queue, &demuxer_thread);
   if (thread_ret != 0) {
     goto cleanup_thread;
   }
@@ -370,6 +374,14 @@ cleanup_thread:
            (double)total_skipped_samples / opus_sample_rate,
            (long long)total_silenced_frames);
   }
+  if (stats != NULL && (stats->packets_received > 0 || stats->packets_lost > 0 || stats->packets_late > 0)) {
+    printf("RTP receive finished: %lld packets, %lld lost, %lld arrived too late, %lld reorder timeouts, %lld reorder queue overflows\n",
+           (long long)stats->packets_received,
+           (long long)stats->packets_lost,
+           (long long)stats->packets_late,
+           (long long)stats->reorder_timeouts,
+           (long long)stats->reorder_queue_overflows);
+  }
 
   avcodec_parameters_free(&codecpar);
   av_packet_free(&pkt_clone);
@@ -382,6 +394,8 @@ cleanup_thread:
   av_thread_message_queue_set_err_send(message_queue, AVERROR_EOF);
 
   demux_ret = stop_rtp_demuxer(demuxer_thread);
+  // The demuxer thread has been joined, so nothing writes to the stats anymore
+  av_buffer_unref(&stats_ref);
   if (demux_ret != 0) {
     return demux_ret;
   } else {

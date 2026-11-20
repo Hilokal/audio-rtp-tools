@@ -2,6 +2,10 @@
 
 #include <node_api.h>
 
+extern "C" {
+#include <libavutil/buffer.h>
+}
+
 struct AudioDecodeThreadParams {
   char *sdpBase64;
 
@@ -12,6 +16,14 @@ struct AudioDecodeThreadParams {
   // Deliver silence in place of synthesized audio (PLC, and the comfort noise
   // decoded from DTX / keep-alive packets). FEC-recovered frames are kept.
   bool concealWithSilence;
+
+  // How long to wait for a missing RTP packet, in milliseconds. Negative keeps
+  // the libavformat default (100ms).
+  int32_t maxReorderDelayMs;
+
+  // Reference to an RtpReceiveStats (see rtp_stats.h), released when the
+  // thread exits. May be NULL.
+  AVBufferRef *statsRef;
 };
 
 napi_status start_audio_decode_thread(

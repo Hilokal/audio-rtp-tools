@@ -514,6 +514,155 @@ it.each([
   20 * 1000,
 );
 
+it.each([
+  ["the default", undefined, 9050, false],
+  ["500ms", 500, 9054, false],
+  ["the default, with duplicates", undefined, 9058, true],
+])(
+  "recovers late retransmissions within maxReorderDelayMs: %s",
+  async (_name, maxReorderDelayMs, consumerPort, duplicate) => {
+    const dgram = require("dgram");
+    const RETRANSMIT_AFTER_MS = 250;
+    const AUDIO_MS = 3000;
+    const DROPPED = [25, 50, 75, 100, 125];
+    const relayPort = consumerPort + 2;
+
+    const rtpParameters = createRtpParameters();
+    const sdp = createSDP({
+      subject: "Reorder Delay Test",
+      rtpParameters,
+      originIpAddress: "127.0.0.1",
+      destinationIpAddress: "127.0.0.1",
+      rtpPort: consumerPort,
+      rtcpPort: consumerPort + 1,
+    });
+
+    // Stands in for an SFU on a lossy uplink: some packets go missing, and
+    // each turns up RETRANSMIT_AFTER_MS later, after the packets that
+    // followed it.
+    const relayRtp = dgram.createSocket("udp4");
+    const relayRtcp = dgram.createSocket("udp4");
+    await new Promise((resolve) => relayRtp.bind(relayPort, "127.0.0.1", resolve));
+    await new Promise((resolve) => relayRtcp.bind(relayPort + 1, "127.0.0.1", resolve));
+    let rtpCount = 0;
+    const retransmissions = [];
+    relayRtp.on("message", (packet) => {
+      rtpCount++;
+      if (DROPPED.includes(rtpCount)) {
+        retransmissions.push(
+          new Promise((resolve) =>
+            setTimeout(
+              () => relayRtp.send(packet, consumerPort, "127.0.0.1", resolve),
+              RETRANSMIT_AFTER_MS,
+            ),
+          ),
+        );
+        return;
+      }
+      relayRtp.send(packet, consumerPort, "127.0.0.1");
+      if (duplicate && DROPPED.includes(rtpCount - 1)) {
+        // The packet after each gap arrives twice. libavformat then reports a
+        // wrapped sequence difference for the copy, which must not be counted
+        // as tens of thousands of lost packets.
+        relayRtp.send(packet, consumerPort, "127.0.0.1");
+      }
+    });
+    relayRtcp.on("message", (packet) => {
+      relayRtcp.send(packet, consumerPort + 1, "127.0.0.1");
+    });
+
+    const abortController = new AbortController();
+
+    let concealedFrames = 0;
+    const consumer = consumeRtp({
+      sdp,
+      sampleRate: decodeSampleRate,
+      maxReorderDelayMs,
+      signal: abortController.signal,
+      onAudioData: ({ concealed }) => {
+        if (concealed) {
+          concealedFrames++;
+        }
+      },
+      onError: (error) => {
+        console.log("consumer error", error);
+      },
+    });
+
+    const producer = produceRtp({
+      ipAddress: "127.0.0.1",
+      rtpPort: relayPort,
+      rtcpPort: relayPort + 1,
+      rtpParameters,
+      signal: abortController.signal,
+      keepAlive: false,
+      sampleRate: encodeSampleRate,
+      onError: (error) => {
+        console.log("producer error", error);
+      },
+    });
+
+    const pcmData = fs.readFileSync(
+      path.join(__dirname, "LJ025-0076_24k_mono.wav"),
+    ).subarray(44, 44 + (encodeSampleRate * AUDIO_MS * 2) / 1000);
+    for (let offset = 0; offset < pcmData.length; offset += 960) {
+      producer.write(pcmData.subarray(offset, offset + 960));
+    }
+    producer.end();
+
+    try {
+      await producer.done();
+      await Promise.all(retransmissions);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    } finally {
+      abortController.abort();
+      await consumer.done();
+      relayRtp.close();
+      relayRtcp.close();
+    }
+
+    expect(rtpCount).toBe(AUDIO_MS / 20);
+    // The counters stay readable after the thread has exited.
+    const stats = consumer.getStats();
+    if (duplicate) {
+      expect(stats.packetsLost).toBe(DROPPED.length);
+    } else if (maxReorderDelayMs === undefined) {
+      // The default wait is 100ms: every retransmission arrives after its
+      // packet was given up on, and its frame was concealed.
+      expect(stats).toEqual({
+        packetsReceived: rtpCount - DROPPED.length,
+        packetsLost: DROPPED.length,
+        packetsLate: DROPPED.length,
+        reorderTimeouts: DROPPED.length,
+        reorderQueueOverflows: 0,
+      });
+      expect(concealedFrames).toBe(DROPPED.length);
+    } else {
+      expect(stats).toEqual({
+        packetsReceived: rtpCount,
+        packetsLost: 0,
+        packetsLate: 0,
+        reorderTimeouts: 0,
+        reorderQueueOverflows: 0,
+      });
+      expect(concealedFrames).toBe(0);
+    }
+  },
+  20 * 1000,
+);
+
+it("rejects an invalid maxReorderDelayMs", () => {
+  const options = {
+    sdp: "",
+    sampleRate: decodeSampleRate,
+    signal: new AbortController().signal,
+    onAudioData: () => {},
+  };
+  for (const maxReorderDelayMs of [-1, 1.5, 5001, "500"]) {
+    expect(() => consumeRtp({ ...options, maxReorderDelayMs })).toThrow(TypeError);
+  }
+});
+
 it(
   "saves RTP audio to a webm file via saveAudio",
   async () => {

@@ -113,11 +113,45 @@ type ConsumeOptions = {
   // pts and the concealed / discontinuity flags are the same in both modes.
   concealment?: "plc" | "silence";
 
+  // How long, in milliseconds, to hold later packets back while waiting for a
+  // missing or out-of-order RTP packet before moving on without it. Packets
+  // that arrive in order are never delayed, so this only adds latency around
+  // a gap, after which the held packets are delivered in a burst. Defaults to
+  // 100. Raise it when the listener can trade latency for completeness (a
+  // speech-to-text model): an SFU that recovers a lost packet from the sender
+  // forwards it late, and it is dropped if it misses this window. At most
+  // 5000. 0 turns reordering off: out-of-order packets are dropped and
+  // getStats() no longer counts loss.
+  maxReorderDelayMs?: number;
+
   signal: AbortSignal;
+};
+
+// Counters for the RTP stream received so far. All are cumulative.
+export type ConsumeStats = {
+  // Packets handed to the decoder. A duplicate of the packet just handed on
+  // is counted again.
+  packetsReceived: number;
+  // Sequence numbers skipped: the packet never arrived, or not within
+  // maxReorderDelayMs. Stays 0 when maxReorderDelayMs is 0.
+  packetsLost: number;
+  // Packets dropped on arrival for being older than the last one handed on.
+  // Mostly packets that came after the wait for them had run out, which were
+  // already counted in packetsLost, so this is an upper bound on the loss a
+  // longer maxReorderDelayMs could have recovered. It also counts an old
+  // duplicate, and every packet after the sender's sequence numbers jump
+  // backwards (a restarted sender).
+  packetsLate: number;
+  // Times the wait for a missing packet ran out.
+  reorderTimeouts: number;
+  // Times the reorder queue (500 packets) filled before the wait ran out.
+  reorderQueueOverflows: number;
 };
 
 type ConsumeReturn = {
   done: () => Promise<void>;
+  // Can be called at any time, including after done() has resolved.
+  getStats: () => ConsumeStats;
 };
 
 export function produceRtp(options: ProduceOptions): ProduceReturn {
@@ -415,7 +449,17 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     );
   }
 
-  const { promise } = native.startAudioDecodeThread(
+  const maxReorderDelayMs = options.maxReorderDelayMs;
+  if (
+    maxReorderDelayMs != null &&
+    !(Number.isInteger(maxReorderDelayMs) && maxReorderDelayMs >= 0 && maxReorderDelayMs <= 5000)
+  ) {
+    throw new TypeError(
+      `consumeRtp: maxReorderDelayMs must be an integer from 0 to 5000, got ${JSON.stringify(maxReorderDelayMs)}`,
+    );
+  }
+
+  const { promise, stats } = native.startAudioDecodeThread(
     dataUrl(options.sdp),
     options.onAudioData,
     options.signal,
@@ -423,6 +467,8 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
       sampleRate: options.sampleRate,
       channels: 1,
       concealWithSilence: concealment === "silence",
+      // -1 leaves libavformat's default (100ms) in place
+      maxReorderDelayMs: maxReorderDelayMs ?? -1,
     },
   );
 
@@ -436,7 +482,11 @@ export function consumeRtp(options: ConsumeOptions): ConsumeReturn {
     return promise;
   }
 
-  return { done };
+  function getStats(): ConsumeStats {
+    return native.getRtpReceiveStats(stats);
+  }
+
+  return { done, getStats };
 }
 
 type SaveAudioOptions = {

@@ -56,6 +56,8 @@ Receives RTP via SDP, decodes Opus to PCM, delivers audio data back to JS via a 
 
 Timestamp gaps are filled frame by frame (capped at `MAX_CONCEALMENT_MS`): PLC for every missing frame except the last, which is decoded with `decode_fec=1` from the next packet; libopus recovers it from that packet's in-band FEC when it can and falls back to PLC otherwise. `fec_samples_recovered()` predicts which of the two happened (FEC flag set, previous packet not CELT-only, packet frame no longer than the frame requested; a shorter packet frame only recovers the tail). The `concealment: "silence"` option (`concealWithSilence` in the native params) still runs the decoder for those frames, to keep its state in step, but zeroes the PLC samples and the output of DTX / keep-alive packets; FEC-recovered samples are left alone.
 
+**Loss and reordering** happen below the decoder, in libavformat's RTP demuxer: packets after a missing sequence number are queued for up to `max_delay` (the `maxReorderDelayMs` option, default 100ms) and then released without it. The demuxer reports this only through log messages, so `av_log_override_callback` (`src/worker.cc`) counts them into an `RtpReceiveStats` (`src/rtp_stats.h`) that the demuxer thread registered as thread-local. The stats live in a refcounted `AVBufferRef` shared by the decode thread and a JS external, which is what `getStats()` reads. libavformat's SDP demuxer opens its sockets read-only, so no RTCP (receiver reports, NACKs) is ever sent, even though the SDP says `AVPF`.
+
 ### Producer thread (`src/producer_thread.cc`)
 
 Muxes `AVPacket`s into an RTP/SRTP output stream using ffmpeg's libavformat. Has both a NAPI API (for direct JS use) and a raw pthread API (for use as a child of the encoder thread).

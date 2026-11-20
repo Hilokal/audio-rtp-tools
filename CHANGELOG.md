@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- `consumeRtp()` accepts `maxReorderDelayMs` (0 to 5000, default 100, the existing behavior): how long to wait for a missing or out-of-order RTP packet before moving on without it. In-order packets are never delayed. A higher value lets a latency-tolerant listener keep packets an SFU forwards late after recovering them from the sender.
+- `consumeRtp()` returns `getStats()`, with cumulative counters for the received stream: `packetsReceived`, `packetsLost`, `packetsLate`, `reorderTimeouts`, `reorderQueueOverflows`. `packetsLate` counts packets dropped for arriving too late, which previously went without a trace. A `RTP receive finished:` summary line with the same counters is printed on exit.
+
 ## [1.6.1] - 2026-11-19
 
 - `consumeRtp()` with `concealment: "silence"` no longer delivers PLC as audio in the last frame of a gap when the next packet carries FEC that libopus cannot use: after a CELT-only packet, or when the sender switched to longer frames. When the sender switched to shorter frames, only the samples the FEC covers are kept and the rest of that frame is silence. Streams with a constant frame length in SILK or hybrid mode, including everything `produceRtp()` sends, are unaffected.

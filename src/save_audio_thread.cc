@@ -32,7 +32,7 @@ static int ThreadMain(AVThreadMessageQueue *message_queue, uv_async_t *buffer_re
 
   AVRational input_time_base = {0, 0};
 
-  thread_ret = start_rtp_demuxer(thread_data.sdpBase64, 0, message_queue, &demuxer_thread);
+  thread_ret = start_rtp_demuxer(thread_data.sdpBase64, 0, -1, NULL, message_queue, &demuxer_thread);
   if (thread_ret != 0) {
     goto cleanup_thread;
   }
