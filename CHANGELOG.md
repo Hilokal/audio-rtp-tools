@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.0] - 2026-11-20
 
 - `consumeRtp()` accepts `maxReorderDelayMs` (0 to 5000, default 100, the existing behavior): how long to wait for a missing or out-of-order RTP packet before moving on without it. In-order packets are never delayed. A higher value lets a latency-tolerant listener keep packets an SFU forwards late after recovering them from the sender.
 - `consumeRtp()` returns `getStats()`, with cumulative counters for the received stream: `packetsReceived`, `packetsLost`, `packetsLate`, `reorderTimeouts`, `reorderQueueOverflows`. `packetsLate` counts packets dropped for arriving too late, which previously went without a trace. A `RTP receive finished:` summary line with the same counters is printed on exit.
